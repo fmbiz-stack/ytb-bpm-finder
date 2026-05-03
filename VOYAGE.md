@@ -1,172 +1,273 @@
 # Voyage Spontané — Toi & Gaël
 
-**Préparé le:** dimanche 3 mai 2026
-**Départ:** lundi 4 mai 2026
+**Préparé le:** samedi 2 mai 2026
+**Départ:** dimanche 3 mai 2026, **après 19 h** (vol de soirée YUL)
 **Retour:** samedi 9 mai 2026
-**Durée:** 5 nuits / 6 jours
+**Durée:** 6 nuits / 6 jours
 **Budget par personne:** 1 800 CAD
 **Budget total (2 pers.):** 3 600 CAD
-**Ville de départ présumée:** Montréal (YUL)
+**Ville de départ:** Montréal (YUL)
+**Critère prioritaire:** **CHALEUR + BONNE BOUFFE** 🌶️🍤🍹
 
 ---
 
-## Recommandation principale — Punta Cana, République Dominicaine
+## Stratégie: 2 scénarios à comparer demain matin
 
-**Pourquoi:**
-- Vol direct YUL → PUJ (~4 h)
-- 30 °C, eau 27 °C, plages de Bávaro parmi les plus belles des Caraïbes
-- Forfait tout-inclus = budget prévisible (vol + hôtel + bouffe + alcool)
-- Mai = saison sèche qui se termine, peu de pluie, peu de touristes par rapport à mars
-- Pas besoin de visa pour les Canadiens, juste la carte touristique souvent incluse
+Tu veux bien manger → deux philosophies opposées:
 
-**Aéroport:** Punta Cana International (PUJ)
+- **Scénario A — TOUT-INCLUS « gastronomique »** : un resort réputé pour ses restos à la carte (pas le buffet ordinaire). Pratique, prévisible, plage 5 minutes de la chambre.
+- **Scénario B — NON tout-inclus « foodie »** : tu loges en ville et tu manges *partout*. Plus aventureux, souvent plus impressionnant côté bouffe, exige un peu de logistique.
 
-### Forfait cible (à confirmer demain matin)
+Les deux respectent le 1 800 $ pp. Le choix se joue sur ton humeur du moment.
 
-| Poste | Estimation par pers. (CAD) |
+---
+
+## SCÉNARIO A — Tout-inclus gastronomique
+
+### Destination: Riviera Maya (Mexique) — aéroport CUN
+
+**Pourquoi pas Punta Cana cette fois:** la Riviera Maya a clairement le meilleur niveau culinaire « tout-inclus » des Caraïbes, surtout les complexes Karisma et AMR (Secrets, Dreams, Excellence). Cancún a aussi plus de vols **en soirée** depuis YUL que Punta Cana.
+
+### Vols cibles dimanche 3 mai (départ après 19 h)
+
+| Compagnie | Départ YUL | Arrivée CUN | Notes |
+|---|---|---|---|
+| Air Transat TS194 (typique) | ~21 h 30 | ~02 h 30 lundi | Vol nuit, transfert hôtel inclus si forfait |
+| Sunwing WG582 (typique) | ~19 h 45 | ~01 h | Idem |
+| Air Canada Rouge | varie | varie | Souvent matin, à vérifier |
+
+> **À valider demain matin** — les horaires changent jour le jour. Demander explicitement « **vol après 19 h dimanche soir** ».
+
+### Hôtels AI cibles (réputés pour la bouffe, ~1 350 – 1 500 $ pp forfait)
+
+1. **El Dorado Seaside Suites** (Karisma) — concept *Gourmet Inclusive*, 9+ restos à la carte, qualité quasi 5★
+2. **Generations Riviera Maya** — adults + family, sushi, teppanyaki, bistro français
+3. **Iberostar Selection Paraíso Maya** — bonne bouffe, excellent rapport qualité-prix
+4. **Secrets Maroma Beach** — adults-only, plage parmi les plus belles du Mexique, gastronomie sérieuse
+5. **Hyatt Ziva Riviera Cancún** — récent, 15 restos, bon pour foodies
+
+> Si Riviera Maya sold out: replier sur **Punta Cana — Excellence El Carmen** ou **Secrets Cap Cana** (adults-only, bouffe au-dessus de la moyenne dominicaine).
+
+### Budget Scénario A (par personne)
+
+| Poste | CAD |
 |---|---|
-| Forfait tout-inclus 5 nuits (vol + hôtel 4★) | 1 250 – 1 450 |
-| Bagage enregistré (si non inclus) | 60 |
-| Pourboires (≈10 USD/jour) | 80 |
-| Excursions (1–2) | 150 – 250 |
-| Souvenirs / extras | 100 |
+| Forfait tout-inclus 6 nuits | 1 350 – 1 500 |
+| Pourboires (~10 USD/jour) | 90 |
+| Excursion (Tulum + cénote OU Isla Mujeres) | 150 |
+| Souper *hors* resort (1 soir, ex: Hartwood à Tulum) | 120 |
+| Souvenirs / extras | 80 |
 | Coussin imprévus | 100 |
-| **Total visé** | **~1 750** |
+| **Total** | **~1 800** |
 
-**Marge:** ~50 CAD pp en cas de surcharge carburant ou hôtel un peu plus cher.
+### Restos à viser (sortie hors complexe — vaut le détour)
 
-### Hôtels à viser (4★ tout-inclus, bon rapport qualité-prix)
-
-1. **Be Live Collection Punta Cana** — plage Arena Gorda, animation correcte
-2. **Riu Naiboa** — petit, calme, accès plage du Riu Palace
-3. **Ocean El Faro** — plus récent, piscines impressionnantes
-4. **Grand Sirenis Punta Cana** — gros complexe, beaucoup de restos à la carte
-
-> Stratégie: demander à l'agent les **3 meilleurs « last minute »** dans cette gamme et choisir selon la note Tripadvisor.
-
-### Où réserver demain matin (lundi 4 mai)
-
-- **Sunwing / Vacances Air Canada / Transat** — les sites tombent souvent à 6 h
-- **Vacances WestJet**
-- **Voyages à rabais / Red Tag** (agrégateurs last minute)
-- Appeler une agence en personne dès 9 h si possible — meilleurs deals last minute non publiés
-
-> Astuce: si vol le matin du 4 mai impossible, accepter départ **soirée 4 mai → retour 10 mai** (5 nuits quand même). Souvent moins cher.
+- **Hartwood** (Tulum) — feu de bois, légende, réservation difficile
+- **Arca** (Tulum) — chef star, ambiance jungle
+- **Kitchen Table by Wagyu** (Cancún) — steak + sushi
+- **Le Chique** (Azul Sensatori) — étoilé Forbes, dégustation
 
 ---
 
-## Plan B — Varadero, Cuba
+## SCÉNARIO B — NON tout-inclus, foodie hardcore
 
-Si Punta Cana dépasse 1 800 $:
-- Vol YUL → VRA (~3 h 30)
-- Forfait 4★ tout-inclus souvent **900 – 1 100 CAD pp** dernière minute en mai
-- Plages Varadero = parmi les plus belles du monde
-- **Apporter du cash USD** (cartes canadiennes problématiques à Cuba)
-- Carte touristique cubaine ~25 CAD à l'aéroport
-- Hôtels suggérés: Iberostar Tainos, Be Live Experience Las Morlas, Memories Varadero
+### Option B1 — Mexico City (CDMX) ⭐ RECOMMANDÉ pour foodie
 
-## Plan C — Cancún / Riviera Maya, Mexique
+**Pourquoi:** capitale gastronomique mondiale. **Pujol** et **Quintonil** sont dans le top 50 mondial. Tacos al pastor, mole, mezcalerías, marchés (Roma, Coyoacán). Climat **20-26 °C** en mai (chaud le jour, frais le soir — pas plage mais agréable).
 
-Si les deux premiers sont sold out:
-- Vol YUL → CUN
-- Souvent autour de 1 400 – 1 700 CAD pp tout-inclus en mai
-- Bonus: excursions cénotes + Tulum
+> ⚠️ Si **plage obligatoire** → saute à B2.
+
+**Vol typique YUL → MEX:**
+- Aeromexico AM691 — souvent ~19 h ou 20 h dimanche
+- Air Canada AC1808 — souvent soirée
+- ~5 h de vol direct
+
+**Hébergement (6 nuits):** Airbnb ou boutique-hôtel à **Roma Norte** ou **Condesa** (quartiers foodies)
+- Casa Pancha, Brick Hotel, La Valise, ou Airbnb 600-900 $ pour 6 nuits à 2
+
+**Budget B1 par personne:**
+
+| Poste | CAD |
+|---|---|
+| Vol AR YUL-MEX | 600 – 750 |
+| Hôtel/Airbnb (½ pour 2) | 350 – 450 |
+| Bouffe (gros budget gastronomie) | 500 |
+| Transport (Uber, métro) | 80 |
+| Activités (Teotihuacán, musée Frida, lucha libre) | 120 |
+| Coussin | 100 |
+| **Total** | **~1 750** |
+
+**Restos cibles à réserver MAINTENANT (lundi)** — *Pujol/Quintonil ferment à plein des semaines à l'avance, mais essaie:*
+- **Pujol** (Polanco) — Enrique Olvera, mole vieilli
+- **Quintonil** (Polanco) — top 10 mondial 2024
+- **Contramar** (Roma Norte) — poisson, lunch légendaire
+- **Máximo Bistrot** (Roma) — produits locaux
+- **El Califa de León** (Centro) — premier taqueria étoilé Michelin (~1,50 $ le taco)
+- **El Hidalguense** (Doctores) — barbacoa fin de semaine
+- **Los Cocuyos** (Centro) — tacos de cabeza/suadero, 24/7
+
+### Option B2 — San Juan, Porto Rico (chaleur + plage + foodie)
+
+**Pourquoi:** chaleur garantie (29 °C, eau 27 °C) **ET** très bonne scène culinaire (Old San Juan, La Placita). USD, prises canadiennes, anglais/espagnol.
+
+**Note importante:** Porto Rico = territoire US, donc **pré-dédouanement US à YUL**. Ça rallonge l'enregistrement → arriver 3 h 30 avant.
+
+**Vol YUL → SJU:** souvent escale (Air Canada via YYZ). Direct rare. Vol soirée possible mais à confirmer.
+
+**Hébergement:** AirBnb à Condado ou Old San Juan, ou hôtel La Concha (Condado).
+
+**Budget B2 par personne:**
+
+| Poste | CAD |
+|---|---|
+| Vol AR | 700 – 900 |
+| Hôtel/Airbnb (½) | 450 |
+| Bouffe (mofongo, fruits de mer) | 350 |
+| Location auto 3 jours (El Yunque, Fajardo) | 150 |
+| Activités (forêt, bioluminescence) | 100 |
+| Coussin | 100 |
+| **Total** | **~1 800** |
+
+**Restos cibles San Juan:**
+- **Marmalade** (Old SJ) — fine dining
+- **Santaella** (La Placita) — moderne portoricain
+- **Jose Enrique** (La Placita) — légende locale
+- **La Cueva del Mar** — fruits de mer décontractés
+- **Lote 23** — food court branché
+
+### Option B3 — Cancún / Tulum **sans** AI
+
+Même destination que Scénario A mais **hôtel + restos libres**. Tu profites de la plage caribéenne ET de la scène foodie de Tulum.
+
+- Vol YUL-CUN (mêmes options qu'au-dessus, soirée OK)
+- Airbnb ou hôtel boutique à Tulum (Nest, Be Tulum) ou condo Playa del Carmen
+- Tu manges Hartwood, Arca, Cetli, Posada Margherita, Ki'Bok…
+
+**Budget B3 par personne:** ~1 800 $ très faisable si Airbnb (Tulum est cher en hôtel boutique).
 
 ---
 
-## Itinéraire suggéré (Punta Cana)
+## Comparatif rapide
 
-### Jour 1 — Lundi 4 mai : Départ
-- Arrivée YUL **3 h avant** le vol (sécurité + douanes US-style pour les Caraïbes peuvent être lentes)
-- Check-in hôtel souvent vers 15 h. Si arrivée plus tôt, déposer les bagages et aller à la plage
-- Souper buffet, repérage du resort, premier mojito
+| Critère | A: Riviera Maya AI | B1: Mexico | B2: San Juan | B3: Tulum non-AI |
+|---|---|---|---|---|
+| Chaleur | 🔥🔥🔥 | 🔥🔥 (pas plage) | 🔥🔥🔥 | 🔥🔥🔥 |
+| Plage | ⭐⭐⭐⭐⭐ | ❌ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| Bouffe | ⭐⭐⭐ (resort) | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| Effort logistique | Faible | Moyen | Moyen | Moyen-Élevé |
+| Imprévus possibles | Rares | Modérés | Modérés | Modérés |
+| Vols soirée dim. | Bons | Bons | À vérifier | Bons |
+| Coup de cœur | Sécurité | **Foodie pur** | Plage + foodie | **Best of both** |
 
-### Jour 2 — Mardi 5 mai : Plage / acclimatation
-- Petit-déj puis plage **avec crème solaire** (le soleil tape fort, premier jour critique)
-- Après-midi piscine, animation
-- Souper resto à la carte (réserver le matin à la conciergerie)
-
-### Jour 3 — Mercredi 6 mai : Excursion
-- **Option A:** Isla Saona (catamaran, plage paradisiaque, ~110 USD pp)
-- **Option B:** Hoyo Azul + Scape Park (cenote, tyrolienne, ~120 USD pp)
-- **Option C:** Plongée / snorkeling local (~60 USD pp)
-- Réserver via la concierge OU via vendeur indépendant en bord de plage (souvent 30 % moins cher, mais valider avis)
-
-### Jour 4 — Jeudi 7 mai : Détente
-- Journée libre, plage, spa si budget
-- Soirée: spectacle du resort + boîte de nuit du complexe
-
-### Jour 5 — Vendredi 8 mai : Dernière journée
-- Plage le matin
-- Magasinage souvenirs (rhum Brugal, cigares, café dominicain)
-- Souper resto à la carte « le meilleur » du resort
-
-### Jour 6 — Samedi 9 mai : Retour
-- Petit-déj, check-out (souvent 12 h)
-- Navette aéroport (incluse)
-- Vol retour YUL
+**Mon conseil:** si la **plage est non-négociable** → Scénario A (Riviera Maya AI) ou B3 (Tulum non-AI).
+Si la **bouffe prime sur la plage** → B1 (Mexico, paradis foodie).
+Si tu veux **les deux à parts égales** → B3 (Tulum non-AI), c'est le meilleur compromis sur ton budget.
 
 ---
 
-## Checklist avant le départ (à faire CE SOIR — dimanche 3 mai)
+## Itinéraire jour-par-jour
+
+### Dimanche 3 mai — Départ
+- **Matin:** église ⛪
+- **15 h–16 h:** check des bagages, photo des passeports, dernière vérif assurance
+- **17 h:** départ pour YUL (3 h avant le vol)
+- **20 h–22 h:** décollage (selon scénario)
+
+### Lundi 4 mai — Arrivée + 1ʳᵉ journée
+- Arrivée nuit/petit matin → check-in hôtel (souvent flexible si arrivée nocturne, à confirmer)
+- Sieste, petit-déj, **première vraie sortie bouffe le midi**
+
+### Mardi 5 mai — Acclimatation
+- Plage / quartier exploration
+- **Resto signature** réservé d'avance pour le souper
+
+### Mercredi 6 mai — Excursion
+- A: Tulum + cénotes Dos Ojos
+- B1: Teotihuacán (pyramides, ~1 h 30 de Mexico)
+- B2: El Yunque + Fajardo (baie bioluminescente)
+- B3: Cénote + ruines Cobá
+
+### Jeudi 7 mai — Plein farniente / 2ᵉ resto signature
+- Journée libre
+- **Le repas de la semaine** (réserver dès maintenant le top resto sur ta liste)
+
+### Vendredi 8 mai — Dernier full day
+- Magasinage, marchés, derniers must-eats
+- Soirée: bar à mezcal, beach club, ou rooftop selon destination
+
+### Samedi 9 mai — Retour
+- Petit-déj, check-out, transfert aéroport
+- Vol YUL
+
+---
+
+## Checklist avant départ — À FAIRE AUJOURD'HUI (samedi)
 
 ### Documents
-- [ ] **Passeports valides 6 mois après le retour** (jusqu'à novembre 2026 minimum)
+- [ ] **Passeports valides ≥ 6 mois après le retour** (jusqu'à novembre 2026)
 - [ ] Photo des passeports sur cellulaire + courriel à toi-même
-- [ ] Carte d'assurance voyage (souscrire si pas déjà couvert par carte de crédit — ~30 $ pp)
-- [ ] Confirmation forfait imprimée + version PDF
+- [ ] **ESTA / autorisation US** si scénario B2 (Porto Rico = pré-dédouanement US, ESTA pas requis pour Canadiens mais check à jour)
+- [ ] Carte d'assurance voyage (souscrire ce soir si non couvert — ~30-40 $ pp pour 6 jours)
+- [ ] Confirmation forfait/vol/hôtel imprimée + PDF cellulaire
 
 ### Argent
-- [ ] **200 USD cash en petites coupures** chacun (pourboires + vendeurs locaux)
-- [ ] Carte de crédit sans frais de change (Scotia Passport, Home Trust Preferred, etc.)
-- [ ] Aviser la banque du voyage pour éviter blocage
+- [ ] **200 USD cash** chacun (petites coupures, pourboires)
+- [ ] **Quelques pesos MEX** si scénario A/B1/B3 (option: retirer à l'arrivée)
+- [ ] Carte de crédit sans frais de change (Scotia Passport, Home Trust, EQ Bank)
+- [ ] Aviser banque du voyage (éviter blocage à l'étranger)
 
 ### Santé
 - [ ] Crème solaire **FPS 50+** (cher sur place)
-- [ ] Anti-moustiques avec DEET
-- [ ] Trousse: Tylenol, Imodium, Gravol, pansements
+- [ ] Anti-moustiques DEET (essentiel à Tulum/cénotes)
+- [ ] Trousse: Tylenol, Imodium, Gravol, pansements, sel oral
 - [ ] Médicaments perso en bagage à main
 
-### Bagages (bagage à main + 1 valise enregistrée si incluse)
-- [ ] 5 maillots (alterner = sec)
-- [ ] Sandales + souliers fermés (excursions)
-- [ ] T-shirts légers, 1 chandail (clim hôtel = frette)
-- [ ] **Tenue « propre »** pour resto à la carte (pantalon long obligatoire le soir dans plusieurs resorts)
+### Bagages
+- [ ] 5 maillots, sandales + souliers de marche (ruines/jungle)
+- [ ] T-shirts légers, **1 chandail** (clim + soirées Mexico fraîches)
+- [ ] **Tenue propre** (pantalon long obligatoire pour resto à la carte AI **et** pour Pujol/Quintonil)
 - [ ] Lunettes de soleil + chapeau
-- [ ] Chargeur, adaptateur (RD = prises type A/B comme Canada, pas besoin)
-- [ ] Livre / écouteurs pour le vol
+- [ ] Chargeur, **adaptateur pas requis** (prises type A/B comme Canada)
+- [ ] Livre / écouteurs / téléchargements Netflix offline pour le vol nuit
 
 ---
 
-## Budget détaillé (référence rapide)
+## Budget de référence (récap)
 
-| Catégorie | Par personne | Pour deux |
-|---|---|---|
-| Forfait tout-inclus | 1 350 | 2 700 |
-| Pourboires | 80 | 160 |
-| Excursion 1 | 150 | 300 |
-| Excursion 2 (optionnelle) | 100 | 200 |
-| Souvenirs | 100 | 200 |
-| Coussin imprévus | 120 | 240 |
-| **Total** | **1 800** | **3 600** |
+| Catégorie | A: AI Riviera | B1: Mexico | B2: San Juan | B3: Tulum non-AI |
+|---|---|---|---|---|
+| Vol + hôtel | 1 350 – 1 500 | 950 – 1 200 | 1 150 – 1 350 | 1 100 – 1 350 |
+| Bouffe | inclus | 500 | 350 | 400 |
+| Activités | 150 | 120 | 100 | 150 |
+| Pourboires | 90 | 50 | 80 | 70 |
+| Souvenirs | 80 | 80 | 80 | 80 |
+| Coussin | 100 | 100 | 100 | 100 |
+| **Total pp** | **~1 800** | **~1 750** | **~1 800** | **~1 800** |
+
+---
+
+## Action plan — DEMAIN MATIN (dimanche, après l'église)
+
+1. **12 h** — comparer les sites:
+   - **Sunwing.ca** / **vacancesaircanada.com** / **transat.com** (scénario A)
+   - **kayak.com** + **booking.com** (scénarios B)
+   - **redtag.ca** / **monarc.ca** (last minute AI)
+2. **13 h** — appeler Sunwing 1-877-786-9464 si en ligne incertain
+3. **14 h** — décider, réserver vol + hôtel
+4. **15 h** — réserver **resto signature** du mardi/jeudi (Pujol, Hartwood, Quintonil, Marmalade…)
+5. **16 h** — préparer valises selon checklist
+6. **17 h** — direction YUL
 
 ---
 
 ## Numéros utiles
 
-- **Ambassade du Canada à Saint-Domingue:** +1 809-262-3100
-- **Urgences RD:** 911
-- **Air Canada (réservations):** 1-888-247-2262
+- **Air Canada:** 1-888-247-2262
 - **Sunwing:** 1-877-786-9464
 - **Transat:** 1-877-872-6728
+- **Aeromexico:** 1-800-237-6639
+- **Ambassade Canada Mexico:** +52 55 5724-7900
+- **Ambassade Canada Saint-Domingue:** +1 809-262-3100
+- **Urgences MEX:** 911 — **PR:** 911
 
----
-
-## Action plan — DEMAIN MATIN (lundi 4 mai) à 6 h 30
-
-1. Toi: appeler **Sunwing** pour Punta Cana 4–9 mai
-2. Gaël: appeler **Vacances Transat** pour Punta Cana 4–9 mai
-3. Comparer en ligne: **redtag.ca**, **escapesetc.ca**, **monarc.ca**
-4. Décider en ≤ 1 h, réserver, foncer à l'aéroport pour l'après-midi/soirée
-
-**Bon voyage les gars! 🌴**
+**Bon trip et bon mange! 🌮🦞🍹**
