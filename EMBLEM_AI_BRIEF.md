@@ -92,6 +92,71 @@ differentiable renderer, and all of the generation intelligence.
 
 ---
 
+## 3b. Prior art — read this before designing anything
+
+Two existing projects matter. **Direction C below is already built.** Study it
+before proposing it.
+
+### `505e06b2/Black-Ops-2-Emblem-Editor`
+A browser re-implementation of the BO2 emblem editor. All 261 shapes, 32 layers,
+full transform controls. Its share format is:
+
+```
+base64url( zlib.deflate( JSON.stringify(emblem) ) )
+```
+
+Verified decodable. The JSON is:
+
+```json
+{"playername": "...", "playerclantag": "...", "playerbg": "...",
+ "stack": [{"name": "Full Circle", "x": 150, "y": 150, "rotate": 0,
+            "hue": 0, "saturation": 0, "brightness": 1, "alpha": 1,
+            "scalex": 1.275, "scaley": 1.275}, ...]}
+```
+
+Note the differences from the game's binary format — all mechanically
+convertible, since we have the complete name↔ID map for all 261 shapes:
+
+| | web editor | game binary |
+|---|---|---|
+| shape | by **name** | by **uint16 ID** |
+| colour | HSB | RGB float |
+| position | integer px on a 300×300 canvas | fraction of canvas |
+| scale | **linear** multiplier | **exponent**, true scale = `2^v` |
+| outlined / flipped | **absent** | present |
+
+The missing `outlined` / `flipped` matters: the web format **cannot express
+outline layers**, which is one of the main expert techniques. Web → game
+conversion is lossless (those default to false); game → web loses them.
+
+### `ogarsan/Black-Ops-2-Emblem-Master`
+A fork adding an LLM agent that composes emblems by tool calls — `add_layer`,
+`move_layer`, `update_layer`, `get_emblem_state`, `get_free_layers`, `exec`, etc.
+**It already includes a screenshot-based self-review step.** So the
+"LLM + tools + vision critique" architecture exists and is testable today.
+
+The single most valuable idea in its system prompt is a strategy ordering nobody
+here had considered:
+
+> **Search the catalog before composing.** The `emblems` (106), `gear` (39) and
+> `ranks` (19) categories are *finished artwork*, not primitives — skulls,
+> animals, weapons, people. "A single prefab often beats 10 hand-placed
+> primitives." For a skull, use a skull prefab rather than rebuilding one from
+> circles.
+
+That reframes the problem: it is not always "approximate an image with geometry."
+Often it is "find the prefab that already is 80% of the subject, then compose
+around it." Any serious proposal should decide where prefab-reuse sits relative
+to primitive-composition.
+
+**Before proposing anything, evaluate this fork empirically.** Run it, give it
+hard prompts, and see where it actually lands relative to the reference emblems.
+If it already gets close, the project is tuning, not architecture. If it plateaus
+at "recognisable but crude" — the predicted outcome — then *characterising exactly
+how it fails* is the most valuable input to whatever replaces it.
+
+---
+
 ## 4. The quality bar, and why it's the interesting part
 
 The reference emblems were made **by humans, in-game, with a thumbstick**, inside
@@ -121,10 +186,26 @@ the part an optimizer will not stumble onto by itself:
 5. **Shapes chosen for one edge**, with the rest of the shape pushed off-canvas or
    hidden behind a later layer.
 
-⚠️ **Known correction:** BO2 clamps both scale and off-canvas position. Past some
-limit the shape stops scaling, and you cannot push a layer arbitrarily far out.
-**The actual clamp values are unknown and must be measured, not guessed** — see
-section 7. Any search space built on wrong bounds is poisoned from the start.
+⚠️ **Important correction, and it cuts technique #1 down to size.** BO2 clamps
+both scale and off-canvas position — past a limit the shape stops scaling, and a
+layer cannot be pushed arbitrarily far out. The web editor (built by people who
+studied the game closely) enforces:
+
+- **canvas 300×300 px**; position valid range **−300..300**, values outside
+  *rejected*, not clipped — so roughly one canvas-width of overhang, no more
+- **scale clamped to ±5** on its linear multiplier, where "1.0 ≈ half the canvas,
+  2.0 ≈ fills the canvas", default 1.15
+- rotation 0..360
+
+If that linear scale maps onto the game's exponent as it appears to, the maximum
+usable shape is on the order of **~2.5× the canvas — not the 30× I implied
+earlier.** Technique #1 is real, but it operates over a much tighter range: the
+useful "giant shape" is a couple of canvas-widths, not an enormous one.
+
+**Treat those numbers as the editor's model of the game, not as verified game
+behaviour.** They are the best starting hypothesis available and they must be
+confirmed against captured data — see section 7. A search space built on wrong
+bounds is poisoned from the start.
 
 ---
 
@@ -164,9 +245,11 @@ doesn't address them isn't finished.
 All of these are answerable with the tools that already exist. Cheap to run,
 and several of them constrain the design.
 
-1. **What are the real scale and position clamps?** Capture ~200 expert emblems
-   and histogram `scaleX/scaleY` and `posX/posY`. The observed maxima are the
-   effective limits. Do this before designing any search space.
+1. **What are the real scale and position clamps?** Partially answered — the web
+   editor uses ±5 linear scale and ±300 px position (section 5). Confirm against
+   the game by capturing ~200 expert emblems and histogramming `scaleX/scaleY`
+   and `posX/posY`, and pin down the exact mapping between the editor's linear
+   scale and the game's `2^v` exponent. Do this before designing any search space.
 2. **Is the clamp enforced by the editor or by the renderer?** The editor stops
    you dragging past a limit. Injected data never passes through the editor. If
    the clamp is UI-only, generated emblems could use parameter ranges no
@@ -199,11 +282,29 @@ Real captured emblems are then the *prior* that makes synthetic sampling
 realistic, rather than the training set itself. Model proposes a layout, optimiser
 refines it. Serious ML project.
 
-**C — LLM as artist, with tools.** Plan the composition, choose shapes by name
-(they're semantically named — good LLM territory), place them, render, look at the
-result with vision, correct. This is the intuitive approach and the one most
-likely to hit failure mode #1. If you pursue it, the convergence design *is* the
-contribution.
+*On real data:* there is no public corpus of emblems. Searched — the format specs
+repo has documentation only, and the two editors ship 5 example emblems between
+them. Real data has to be collected: capture off the wire with the proxy, and/or
+harvest share codes from the community (Plutonium forums share `.emblem` files
+from `%localappdata%\Plutonium\storage\t6\players`, and the web editor's codes are
+decodable per section 3b). Assume hundreds are obtainable with effort, not
+thousands cheaply. Plan accordingly — this is the argument for treating real
+emblems as a *prior* over synthetic sampling rather than as a training set.
+
+**C — LLM as artist, with tools. ⚠️ ALREADY BUILT — see section 3b.** Plan the
+composition, choose shapes by name, place them, render, review with vision,
+correct. `ogarsan/Black-Ops-2-Emblem-Master` implements exactly this, screenshot
+self-review included. Do not re-propose it as new work. Either measure where it
+plateaus and improve it specifically, or explain what it structurally cannot do.
+It is also the approach most exposed to failure mode #1, so if you build on it,
+the convergence design *is* the contribution.
+
+**C2 — Prefab-first composition.** Distinct enough from C to state separately.
+164 of the 261 shapes are finished artwork (`emblems` + `gear` + `ranks`), not
+geometry. Retrieval over that set — "which prefab is closest to my subject?" —
+may beat any amount of primitive fitting for subjects the catalog happens to
+cover, and fail completely for those it doesn't. Worth knowing which subjects
+fall on which side of that line before committing to an architecture.
 
 **D — Idiom DSL.** LLMs are bad at raw coordinates and good at composition. So
 don't ask for coordinates. Define higher-level primitives — `soft_shadow(under=X,
