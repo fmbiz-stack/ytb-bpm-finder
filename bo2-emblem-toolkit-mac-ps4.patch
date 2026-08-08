@@ -1,0 +1,3200 @@
+From f40e4e7db1301bfde49c19835388b3c91730c05c Mon Sep 17 00:00:00 2001
+From: Felix Morris <felixmorris.biz@gmail.com>
+Date: Sat, 8 Aug 2026 14:33:26 +0000
+Subject: [PATCH] Add macOS and PS4 support
+
+Recognise emblem requests by their path (/u<hex>.slot_<n>) on a Demonware
+host rather than a hardcoded PS3 hostname, so the PS4 and PS5 releases work
+without knowing their content-server hostname in advance. Detect the emblem
+blob's byte order per capture, since the PS3 writes big-endian and the PC and
+PS4/PS5 releases write little-endian.
+
+On macOS, keep captures in Application Support for .app bundles instead of
+inside the bundle, create the data directory before writing to it, close
+tunnel sockets rather than leaking descriptors, list every candidate LAN
+address so Internet Sharing works, and add a Finder launcher, a build script
+and a Quit button.
+
+Also fix path traversal via control-panel group names, origin-form proxy
+requests, missing socket timeouts and silent proxy startup failures.
+---
+ .gitignore                       |   1 +
+ PORTING_NOTES.md                 | 124 ++++++++++++
+ README.md                        |  37 ++--
+ build_macos.sh                   |  61 ++++++
+ docs/CONSOLES.md                 | 124 ++++++++++++
+ docs/INSTALL.md                  | 231 +++++++++++++++------
+ docs/USAGE.md                    |  19 +-
+ emblemtool/__init__.py           |   2 +-
+ emblemtool/config.py             | 100 +++++++--
+ emblemtool/consoles.py           | 216 ++++++++++++++++++++
+ emblemtool/proxy.py              | 220 +++++++++++++++-----
+ emblemtool/settings.py           |  50 +++++
+ emblemtool/shapes/render.py      |  76 ++++++-
+ emblemtool/storage.py            |  14 +-
+ emblemtool/web/netinfo.py        | 156 +++++++++++++-
+ emblemtool/web/server.py         |  73 +++++--
+ emblemtool/web/static/app.js     | 143 ++++++++++++-
+ emblemtool/web/static/index.html |  45 ++++-
+ emblemtool/web/static/style.css  |  94 +++++++++
+ run.py                           | 102 ++++++++--
+ start.command                    |  47 +++++
+ start.sh                         |  28 +++
+ tests/test_proxy_end_to_end.py   | 182 +++++++++++++++++
+ tests/test_toolkit.py            | 336 +++++++++++++++++++++++++++++++
+ 24 files changed, 2278 insertions(+), 203 deletions(-)
+ create mode 100644 PORTING_NOTES.md
+ create mode 100755 build_macos.sh
+ create mode 100644 docs/CONSOLES.md
+ create mode 100644 emblemtool/consoles.py
+ create mode 100644 emblemtool/settings.py
+ create mode 100755 start.command
+ create mode 100755 start.sh
+ create mode 100644 tests/test_proxy_end_to_end.py
+ create mode 100644 tests/test_toolkit.py
+
+diff --git a/.gitignore b/.gitignore
+index 9ebcce0..af30e43 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -2,6 +2,7 @@
+ # should never be committed.
+ saved/
+ state.txt
++settings.json
+ 
+ # Python
+ __pycache__/
+diff --git a/PORTING_NOTES.md b/PORTING_NOTES.md
+new file mode 100644
+index 0000000..b30e711
+--- /dev/null
++++ b/PORTING_NOTES.md
+@@ -0,0 +1,124 @@
++# macOS and PS4 support — what changed and why
++
++Notes for @alexkotr1 on this branch. Everything here is on top of v1.0.0, it's
++MIT like the rest, and it's yours to take, split up, or ignore. Nothing about
++the emblem format, the shape calibration or the renderer's geometry was
++touched — that work is all still exactly as you had it.
++
++Test suite: `python -m unittest discover -s tests` (43 tests, stdlib only,
++Pillow-dependent ones skip without it).
++
++## PS4
++
++**The hostname was the blocker.** `config.TARGET_HOST_SUBSTR` pinned
++`ops2-ps3-cs.prod.demonware.net`. That's the right host for the PS5 release —
++it's a port of the PS3 build and kept the PS3 backend — but nothing guarantees
++Activision shipped the PS4 SKU on the same one, and there's no way to find out
++without a PS4 to capture from. Pinned to one hostname, the failure mode is
++silent: the proxy passes everything through and the user sees nothing happen.
++
++So matching now keys off the request path instead. Demonware emblem objects are
++always `/u<hex>.slot_<n>`, which is distinctive on its own, and the check is
++bounded to `*.demonware.net` so nothing else is ever inspected. That works on
++any console and any SKU without knowing its hostname in advance
++(`emblemtool/consoles.py`).
++
++The hostname lists are still there per console, so you can pin one if you'd
++rather, and so the panel can name what it saw. If the PS4 does turn out to use
++its own host, this already handles it and the preset list just needs the name
++filled in for tidiness.
++
++**Endianness.** `parse_slot_bytes` was hardcoded to `<`. The PS3 is big-endian
++PowerPC; PC and the PS4/PS5 ports are little-endian x86. A PS3 capture parsed as
++little-endian renders as garbage. `detect_endianness` scores both orders against
++the ranges the fields can't leave (colours 0..1, finite floats, plausible shape
++ids) and picks the better one, per blob — so PS3 and PS4/PS5 captures sit in the
++same panel and both render. Verified: the same emblem encoded big- and
++little-endian renders to byte-identical PNGs.
++
++**Console picker** in the control panel (auto / PS5 / PS4 / PS3 / Xbox / PC),
++persisted in `settings.json`. Mostly it just shows the right menu path for the
++hardware — the PS4's proxy field is behind **Custom** setup, which is the single
++most common "I can't find the proxy setting" complaint — but it also lets
++someone pin a host if they want the old narrow behaviour.
++
++**Detection feedback**, which turned out to matter more than expected. The panel
++now distinguishes "nothing is reaching the proxy" from "traffic is arriving but
++no emblem request yet" from "emblem traffic seen, here's the endpoint and which
++console it looks like". Previously all three looked like "nothing happens", and
++so did a wrong IP, a firewall block and the wrong mode.
++
++## macOS
++
++**The `.app` data directory.** A frozen build wrote next to `sys.executable`.
++Inside a `.app` that's `Contents/MacOS/`, which is invisible in Finder and
++thrown away when the app is replaced — captures would silently vanish on
++upgrade. macOS bundles now use `~/Library/Application Support/BO2EmblemToolkit`.
++Windows behaviour is unchanged, and an existing `saved/` beside the executable
++still wins everywhere, so nobody's captures move.
++
++**A missing data directory crashed the proxy thread**, which is the normal
++first-run state for that Application Support path. `write_state` threw
++`FileNotFoundError` inside the thread, the thread died, and the app carried on
++looking healthy with no proxy. Directory is created at import now, and any
++startup failure is recorded and shown in the panel instead of vanishing.
++
++**Socket leak.** `pipe()` called `shutdown()` but never `close()`, so every
++passed-through request leaked two descriptors until GC. It's survivable on
++Windows; a Finder-launched macOS app gets a 256-descriptor soft limit, and a
++console makes a lot of requests. Closed explicitly now, and `run.py` raises the
++soft limit toward the hard one where the OS allows it. (Confirmed with
++`-W error::ResourceWarning` in the test run.)
++
++**Launchers and packaging**: `start.command` for Finder (finds a suitable
++Python, installs Pillow if it's missing), `start.sh` for Linux, and
++`build_macos.sh` producing both a `.app` and a plain CLI binary, ad-hoc signed.
++Not notarised, so `docs/INSTALL.md` covers the quarantine flag and the incoming
++-connections firewall prompt.
++
++**A Quit button**, because the `.app` has no terminal to Ctrl+C.
++
++**LAN IP detection** returned one address, from the outbound route. That's the
++wrong one whenever the console is tethered to the machine rather than sharing a
++router — which on a Mac means Internet Sharing, where the console is on
++`bridge100` at 192.168.2.1 and the default route goes somewhere else entirely.
++It now lists every usable address with the outbound one first, labels the
++sharing interfaces, and the panel and terminal banner show all of them.
++
++## Things that aren't macOS or PS4, found on the way
++
++Say the word and I'll pull these into their own PR instead.
++
++- **Path traversal in the control panel.** `group` came out of the URL and went
++  into `os.path.join` unvalidated, on a server bound to `0.0.0.0` because the
++  console has to reach it. `/api/emblems/<group>/<slot>/label` would write
++  `meta.json` anywhere the process could reach, and `/api/render/` would read
++  back out. Group names are validated in `group_dir()` now — one chokepoint,
++  everything routes through it — plus at the request handlers. Tests cover it.
++- **Origin-form requests.** `handle` assumed the absolute form
++  (`GET http://host/path`). The origin form with a `Host` header is legal, and
++  produced an empty host and a dead request. Falls back to the header now.
++- **No socket timeouts.** A wedged connection parked a thread forever. Connect
++  and read timeouts added; tunnels deliberately keep none, since an idle
++  matchmaking tunnel is normal and a timeout there would break PSN.
++- **Port conflicts.** The panel now moves to the next free port if 8090 is
++  taken (nothing external points at it), while the proxy port deliberately
++  doesn't — the console is configured with that by hand — and instead fails
++  loudly in the panel. `BO2_PROXY_PORT` / `BO2_WEB_PORT` / `BO2_TOOLKIT_DATA_DIR`
++  override the defaults.
++- `Image.new` and `point()` could throw on colour values slightly outside 0..1;
++  clamped.
++- `int()` on a malformed `Content-Length` could throw; guarded.
++
++## What I couldn't test
++
++I don't have a PS4, a PS5 or a PS3, so none of this has touched real console
++traffic. What is tested is everything up to the socket: 43 tests including
++capture and Show driven end-to-end through the real proxy over real sockets
++against a stand-in Demonware server, covering the legacy PS3 host, an unknown
++PS4-style host, non-emblem Demonware paths and unrelated hosts.
++
++The specific thing worth confirming on hardware is what the PS4 release's
++content-server hostname actually is. Auto-detect doesn't need it, but it's
++worth knowing, and the panel prints it as soon as any emblem request comes
++through.
+diff --git a/README.md b/README.md
+index 777f362..baa1c40 100644
+--- a/README.md
++++ b/README.md
+@@ -1,27 +1,29 @@
+ # BO2 Emblem Toolkit
+ 
+-A tool for copying another player's Black Ops II emblem onto your own account on PS5.
++A tool for copying another player's Black Ops II emblem onto your own account.
+ 
+ You capture the emblem while looking at that player's profile, then load it into your own in-game emblem editor and save it there. From that point it's yours, the same as anything else you made in the editor.
+ 
+-Built for personal use, on your own PS5 and your own home network.
++Works with the PS4 and PS5 releases and with an original PS3, from Windows, macOS or Linux. Built for personal use, on your own console and your own home network.
+ 
+ ## How it works
+ 
+-Black Ops II fetches emblem data over plain HTTP from Treyarch's old Demonware servers. This tool runs a small proxy on your PC, and you point your PS5's network settings at it. Only that one emblem-storage endpoint is touched:
++Black Ops II fetches emblem data over plain HTTP from Treyarch's old Demonware servers. This tool runs a small proxy on your computer, and you point your console's network settings at it. Only emblem-storage requests are touched:
+ 
+ - In capture mode, the proxy saves a copy of whatever emblem data your console downloads.
+ - In show mode, it replaces the emblem data your console downloads with a captured emblem of your choosing.
+ 
+ Everything else, including PSN sign-in and matchmaking, passes through the proxy untouched. HTTPS traffic is tunneled through as-is and is never decrypted.
+ 
++Emblem requests are recognised by the shape of the request path (`/u<hex>.slot_<n>`) on a Demonware host, not by a hardcoded hostname, so it doesn't need to be told which console or which release you're on. The control panel tells you what it detected once traffic starts arriving.
++
+ ## The actual steps
+ 
+ 1. Turn on capture mode in the control panel.
+-2. On your PS5, open the profile or channel of the player whose emblem you want. Their emblem gets saved automatically.
++2. On your console, open the profile or channel of the player whose emblem you want. Their emblem gets saved automatically.
+ 3. In the control panel, click the captured emblem to select it.
+ 4. Turn on show mode.
+-5. Open your own emblem editor on the PS5. The captured emblem loads in place of whatever you'd normally see there.
++5. Open your own emblem editor. The captured emblem loads in place of whatever you'd normally see there.
+ 6. Save it, same as you would with anything you made yourself.
+ 
+ Two things worth knowing before you try this:
+@@ -29,32 +31,36 @@ Two things worth knowing before you try this:
+ - The game only checks for a new emblem once per session. After you open the editor the first time, it caches what it loaded and won't ask again, even if you pick a different capture afterward. To load a different one, restart the game, or switch to Zombies and back to Multiplayer, before opening the editor again.
+ - It won't work if the emblem uses a shape you haven't unlocked on your own account. Black Ops II checks that itself, and there's nothing the proxy can do about it.
+ 
+-See [docs/USAGE.md](docs/USAGE.md) for the full walkthrough and [docs/INSTALL.md](docs/INSTALL.md) for setup.
++See [docs/USAGE.md](docs/USAGE.md) for the full walkthrough, [docs/INSTALL.md](docs/INSTALL.md) for setting the tool up on your computer, and [docs/CONSOLES.md](docs/CONSOLES.md) for pointing your console at it.
+ 
+ ## Running it
+ 
+-On Windows, the simplest option is to download `BO2EmblemToolkit.exe` from the [Releases page](https://github.com/alexkotr1/bo2-emblem-toolkit/releases) and double-click it. Nothing else to install.
++**Windows**: download `BO2EmblemToolkit.exe` from the [Releases page](https://github.com/alexkotr1/bo2-emblem-toolkit/releases) and double-click it. Nothing else to install.
++
++**macOS**: download `BO2EmblemToolkit.app` from the same page, or run it from source with `./start.command` (double-click it in Finder). See [docs/INSTALL.md](docs/INSTALL.md) for the Gatekeeper and firewall prompts you'll get the first time.
+ 
+-To run it from source instead:
++**From source, any OS**:
+ 
+ ```
+ pip install -r requirements.txt
+ python run.py
+ ```
+ 
+-Your browser opens to the control panel on its own. On Windows you can also just double-click `start.bat`.
++Your browser opens to the control panel on its own. There are also `start.bat` (Windows), `start.command` (macOS) and `start.sh` (Linux) if you'd rather double-click something.
+ 
+ ## Requirements
+ 
+-- The exe: Windows only, nothing else needed
++- Prebuilt app: nothing else needed
+ - From source: Windows, macOS, or Linux with Python 3.9 or newer, plus Pillow (installed automatically from `requirements.txt`)
+-- Either way: a PS5 and a PC on the same network, or the PC's own mobile hotspot with the PS5 connected to it
++- Either way: a console and a computer on the same network, or the computer's own hotspot / Internet Sharing with the console connected to it
+ 
+ ## Project layout
+ 
+ ```
+ emblemtool/
+-  config.py      ports and file paths
++  config.py       ports and file paths
++  consoles.py     console presets and how emblem traffic is recognised
++  settings.py     the console you picked, remembered between runs
+   state.py        current mode: off, capture, or show
+   storage.py      captured emblems on disk, and their labels
+   broadcast.py    which emblem is currently selected
+@@ -62,13 +68,18 @@ emblemtool/
+   shapes/         the calibrated shape data and the emblem renderer
+   web/            the control panel: API plus static frontend
+ run.py            starts everything
++tests/            python -m unittest discover -s tests
+ ```
+ 
+ Details on the emblem file format and how it was worked out are in the module docstrings, mainly `emblemtool/shapes/render.py`.
+ 
+ ## Contributing
+ 
+-Issues and pull requests are welcome.
++Issues and pull requests are welcome. There's a test suite:
++
++```
++python -m unittest discover -s tests
++```
+ 
+ ## License
+ 
+diff --git a/build_macos.sh b/build_macos.sh
+new file mode 100755
+index 0000000..9b01141
+--- /dev/null
++++ b/build_macos.sh
+@@ -0,0 +1,61 @@
++#!/bin/bash
++# Builds the macOS release artifacts. Only needed if you want to produce them
++# yourself instead of downloading them from the Releases page.
++#
++#   dist/cli/BO2EmblemToolkit       a single-file binary, run from Terminal,
++#                                   shows the live log
++#   dist/app/BO2EmblemToolkit.app   double-clickable app, no Terminal window;
++#                                   stop it with Quit in the control panel
++#
++# Both are ad-hoc signed at the end. That is not the same as notarising: on
++# another Mac, Gatekeeper will still quarantine a download. See docs/INSTALL.md
++# for the one-line fix users need (xattr -dr com.apple.quarantine).
++set -euo pipefail
++cd "$(dirname "$0")"
++
++PYTHON=${PYTHON:-python3}
++"$PYTHON" -m pip install -r requirements.txt pyinstaller
++
++# macOS uses ':' as the --add-data separator, unlike Windows' ';'.
++COMMON=(
++  --noconfirm
++  --clean
++  --onefile
++  --name BO2EmblemToolkit
++  --add-data "reference_shapes:reference_shapes"
++  --add-data "emblemtool/web/static:emblemtool/web/static"
++  --add-data "LICENSE:."
++)
++
++echo "==> Building the command-line binary"
++"$PYTHON" -m PyInstaller "${COMMON[@]}" \
++  --distpath dist/cli --workpath build/cli --specpath build \
++  run.py
++
++echo "==> Building the .app bundle"
++"$PYTHON" -m PyInstaller "${COMMON[@]}" \
++  --windowed \
++  --osx-bundle-identifier com.github.alexkotr1.bo2emblemtoolkit \
++  --distpath dist/app --workpath build/app --specpath build/appspec \
++  run.py
++
++echo "==> Ad-hoc signing"
++codesign --force --deep --sign - dist/app/BO2EmblemToolkit.app
++codesign --force --sign - dist/cli/BO2EmblemToolkit
++
++cat <<'EOF'
++
++Built:
++  dist/cli/BO2EmblemToolkit
++  dist/app/BO2EmblemToolkit.app
++
++The .app keeps captured emblems in ~/Library/Application Support/BO2EmblemToolkit,
++because anything written inside a bundle is lost when the app is replaced.
++To make it portable instead, put a folder named "saved" next to the .app and it
++will use that.
++
++Apple Silicon note: this produces a binary for whichever architecture the Python
++you built with was. For a universal build, use a universal2 Python and add
++  --target-arch universal2
++to COMMON above.
++EOF
+diff --git a/docs/CONSOLES.md b/docs/CONSOLES.md
+new file mode 100644
+index 0000000..9f5febc
+--- /dev/null
++++ b/docs/CONSOLES.md
+@@ -0,0 +1,124 @@
++# Pointing your console at the toolkit
++
++The toolkit has to be [installed and running](INSTALL.md) first. The control
++panel shows the address and port to use, and repeats the steps below for
++whichever console you pick from the list at the top of it.
++
++Your console and the computer need to be on the same network — the same
++Wi-Fi/router, or the computer's own hotspot / Internet Sharing with the console
++connected to it.
++
++## Which console setting to use
++
++Leave it on **Auto-detect** unless you have a reason not to. Emblem requests
++are recognised by their path (`/u<hex>.slot_<n>`) on a Demonware host, which
++doesn't depend on knowing your console's hostname in advance. Picking a
++specific console only narrows what the proxy will touch, and changes which
++setup steps the panel shows you.
++
++Once traffic starts flowing, the panel's "Console setup" section tells you what
++it actually saw — the endpoint hostname and which console it belongs to.
++
++## PlayStation 5
++
++1. Settings → Network → Settings → Set Up Internet Connection
++2. Highlight your network, press the Options button, choose Advanced Settings
++3. Set Proxy Server to **Use**
++4. Enter the address and port from the control panel
++5. Save, then run Test Internet Connection
++
++## PlayStation 4
++
++1. Settings → Network → Set Up Internet Connection
++2. Choose Use Wi-Fi or Use a LAN Cable
++3. Choose **Custom** — Easy skips the proxy screen entirely, which is the most
++   common reason people can't find the setting
++4. Work through the screens:
++   - IP Address Settings: **Automatic**
++   - DHCP Host Name: **Do Not Specify**
++   - DNS Settings: **Automatic**
++   - MTU Settings: **Automatic**
++   - Proxy Server: **Use**
++5. Enter the address and port from the control panel
++6. Save, then run Test Internet Connection
++
++The PS4 test result normally reads "Successful" for the connection and may show
++NAT Type 2 or 3. If PSN sign-in fails but the connection succeeds, see
++[Troubleshooting](#troubleshooting).
++
++## PlayStation 3
++
++1. Settings → Network Settings → Internet Connection Settings
++2. Choose **Custom**
++3. Accept the defaults through the screens until you reach Proxy Server
++4. Proxy Server: **Use**, then enter the address and port from the control panel
++5. Save and test the connection
++
++Emblem data written by a PS3 is big-endian, unlike the PS4/PS5 releases. The
++renderer works that out per capture, so PS3 captures and PS4/PS5 captures show
++up correctly side by side in the same panel.
++
++## Xbox 360 / Xbox One / Series
++
++Xbox consoles have no proxy setting, so there's no direct equivalent. This is
++untested, but the shape of the workaround is to make the console route its
++traffic through your computer instead of asking it to:
++
++- Share your computer's connection to the console (Internet Connection Sharing
++  on Windows, Internet Sharing on macOS) and redirect port 80 to the proxy with
++  a firewall rule, or
++- Run a DNS server that points the Demonware content host at your computer, and
++  set the console's DNS manually.
++
++If you get either working, the toolkit itself needs no changes — pick
++Auto-detect and it will pick the traffic up. An issue or PR describing what
++worked would be welcome.
++
++## PC
++
++Set the system proxy to the address and port shown in the control panel:
++
++- Windows: Settings → Network & Internet → Proxy → Manual proxy setup
++- macOS: System Settings → Network → your connection → Details → Proxies → Web Proxy (HTTP)
++
++Untested, since the PC release was delisted, but the endpoint layout is the
++same.
++
++## When you're finished
++
++Set the proxy setting back to **Do Not Use** on the console. If you leave it
++pointing at a computer that isn't running the toolkit, the console loses its
++internet connection and the cause is not obvious later.
++
++## Troubleshooting
++
++**The connection test fails, or the console says it has no internet**
++
++The address is the usual culprit. If the console is tethered to this computer
++rather than sharing a router with it, you need that interface's address —
++`192.168.2.1` on macOS Internet Sharing, `192.168.137.1` on a Windows mobile
++hotspot — not the one facing your own router. The control panel lists all of
++them; try the others.
++
++After that, check the firewall on the computer. See
++[INSTALL.md](INSTALL.md#troubleshooting).
++
++**The console connects, but nothing shows up in the control panel**
++
++Open the "Console setup" section of the panel. It tells you which of these
++you're in:
++
++- *waiting for emblem traffic* — nothing has reached the proxy at all. The
++  address, port or firewall is wrong.
++- *console connected, no emblem traffic yet* — the network side is right, the
++  game just hasn't asked for an emblem yet. Open a player's profile in Capture
++  mode, or your own emblem editor in Show mode.
++- *emblem traffic seen* — it's working. If captures still aren't appearing,
++  you're in the wrong mode.
++
++**PSN sign-in fails while the proxy is on**
++
++Sign-in is HTTPS and is tunneled without being touched, so this is normally a
++network problem rather than the proxy rewriting anything. Check that the
++computer itself has a working connection, and that no VPN on the computer is
++re-routing the tunneled traffic somewhere the console's session doesn't expect.
+diff --git a/docs/INSTALL.md b/docs/INSTALL.md
+index b0dd7fc..b9232ae 100644
+--- a/docs/INSTALL.md
++++ b/docs/INSTALL.md
+@@ -1,42 +1,120 @@
+ # Installing the BO2 Emblem Toolkit
+ 
+-This is a one-time setup. Once it's done, day-to-day use is just
++This is a one-time setup on your computer. Once it's done, point your console
++at it ([docs/CONSOLES.md](CONSOLES.md)) and day-to-day use is just
+ [docs/USAGE.md](USAGE.md).
+ 
+-## Windows: just download the exe
++- [Windows](#windows)
++- [macOS](#macos)
++- [Linux](#linux)
++- [Running from source on any OS](#running-from-source-on-any-os)
++- [Troubleshooting](#troubleshooting)
+ 
+-If you're on Windows and don't want to deal with Python at all, grab
+-`BO2EmblemToolkit.exe` from this project's
++## Windows
++
++Grab `BO2EmblemToolkit.exe` from the
+ [Releases page](https://github.com/alexkotr1/bo2-emblem-toolkit/releases).
+-It's a single file with everything already inside it. Put it in its own
+-folder (it saves your captured emblems next to itself), double-click it, and
+-skip ahead to [Point your PS5 at it](#point-your-ps5-at-it) below.
++It's a single file with everything already inside it. Put it in its own folder
++(it saves your captured emblems next to itself), double-click it, and skip
++ahead to [docs/CONSOLES.md](CONSOLES.md).
+ 
+-Windows may warn you that the file is from an unrecognized publisher, since
+-it isn't signed with a paid code-signing certificate. Click "More info" then
+-"Run anyway." If you'd rather verify the code yourself first, or you're on
+-macOS/Linux, use the Python setup instead.
++Windows may warn you that the file is from an unrecognized publisher, since it
++isn't signed with a paid code-signing certificate. Click "More info" then "Run
++anyway." If you'd rather verify the code yourself first, use the source setup
++below.
+ 
+-## Running it from source instead (any OS)
++The first time it runs, Windows Firewall will ask whether to allow it. Say yes
++for **private networks** — your console can't reach the proxy otherwise.
+ 
+-### 1. Install Python
++## macOS
+ 
+-You need Python 3.9 or newer.
++Grab `BO2EmblemToolkit.app` from the
++[Releases page](https://github.com/alexkotr1/bo2-emblem-toolkit/releases), or
++[run it from source](#running-from-source-on-any-os) — on macOS that's as
++simple as double-clicking `start.command`, and it avoids all of the Gatekeeper
++business below.
++
++### Gatekeeper
++
++The app isn't notarised (that needs a paid Apple Developer account), so macOS
++will refuse to open it on the first try and say it's damaged or from an
++unidentified developer. It isn't damaged — that's the standard message for
++anything downloaded without notarisation. Clear the quarantine flag:
++
++```
++xattr -dr com.apple.quarantine /Applications/BO2EmblemToolkit.app
++```
++
++then open it normally. Alternatively, right-click the app, choose Open, and
++click Open in the dialog — that works on some macOS versions but not all
++recent ones.
++
++### The firewall prompt
++
++The first time it runs, macOS asks whether to allow incoming connections.
++**Allow** it. Your console connects *in* to the proxy, so denying this is the
++same as not running the tool at all. If you clicked Deny by accident:
++
++System Settings → Network → Firewall → Options, find the entry, set it to
++"Allow incoming connections". If there's no entry, remove and re-add it with
++the `+` button.
++
++### Where the app keeps your emblems
++
++The `.app` writes captures to:
++
++```
++~/Library/Application Support/BO2EmblemToolkit
++```
++
++Not inside the app bundle — anything in there is thrown away when you replace
++the app. If you'd rather keep it portable, make a folder named `saved` next to
++the `.app` and it will use that folder instead.
++
++### Stopping it
++
++The `.app` has no terminal window, so use the **Quit** button in the control
++panel. If you run from source or use the command-line binary, `Ctrl+C` in the
++terminal works too.
++
++### Building the mac app yourself
++
++```
++./build_macos.sh
++```
++
++That produces `dist/app/BO2EmblemToolkit.app` and a plain command-line binary
++at `dist/cli/BO2EmblemToolkit`. Both are ad-hoc signed. The build targets
++whichever architecture your Python is; see the note the script prints for
++universal (Intel + Apple Silicon) builds.
++
++## Linux
+ 
+-On Windows, download it from [python.org/downloads](https://www.python.org/downloads/). During installation, check the box that says "Add python.exe to PATH." It's easy to miss, and nothing here will run without it.
++Run from source — see below. `./start.sh` is a convenience wrapper around
++`python3 run.py`.
+ 
+-On macOS, Python 3 is often already there. If not, get it from python.org or run `brew install python3`.
++If your firewall is active, allow inbound TCP on port 8080, e.g.
++`sudo ufw allow from 192.168.0.0/16 to any port 8080 proto tcp`.
+ 
+-On Linux, install it through your distro's package manager, for example `sudo apt install python3 python3-pip`.
++## Running from source on any OS
+ 
+-To check it worked, open a terminal (Command Prompt on Windows) and run:
++### 1. Install Python
++
++You need Python 3.9 or newer.
++
++- **Windows**: [python.org/downloads](https://www.python.org/downloads/). During
++  installation, check "Add python.exe to PATH". It's easy to miss, and nothing
++  here will run without it.
++- **macOS**: often already there. If not, `brew install python3` or python.org.
++- **Linux**: your distro's package manager, e.g. `sudo apt install python3 python3-pip`.
++
++Check it worked:
+ 
+ ```
+-python --version
++python3 --version
+ ```
+ 
+-You should see something like `Python 3.11.4`. If you get an error, Python
+-isn't installed correctly or isn't on your PATH yet.
++You should see something like `Python 3.11.4`.
+ 
+ ### 2. Get the toolkit
+ 
+@@ -53,73 +131,92 @@ emblem thumbnails. Nothing else is required.
+ 
+ ### 4. Run it
+ 
+-**Windows**: double-click `start.bat`.
+-
+-**Any platform**:
+-
+-```
+-python run.py
+-```
++- **Windows**: double-click `start.bat`
++- **macOS**: double-click `start.command` (it installs Pillow for you if it's missing)
++- **Linux**: `./start.sh`
++- **Anywhere**: `python3 run.py`
+ 
+ A terminal window will show something like:
+ 
+ ```
+-============================================================
++================================================================
+  BO2 Emblem Toolkit
+-============================================================
+- Control panel : http://localhost:8090
+- PS5 proxy setting -> 192.168.1.42 : 8080
+-============================================================
++================================================================
++ Control panel  : http://localhost:8090
++ Console        : Auto-detect
++ Proxy setting  : 192.168.1.42 : 8080
++                  or 192.168.2.1 (bridge100)
++ Saving data to : /Users/you/bo2-emblem-toolkit
++================================================================
+ ```
+ 
+ Your browser should open to the control panel automatically. If it doesn't,
+ open `http://localhost:8090` yourself.
+ 
+-Keep this terminal window open while you use the toolkit. Closing it stops everything. To stop on purpose, press `Ctrl+C` in that window, or just close it.
+-
+-## Point your PS5 at it
+-
+-Your PS5 and this PC need to be on the same network, either the same Wi-Fi/router, or this PC's own mobile hotspot with the PS5 connected to it.
+-
+-On the PS5:
+-
+-1. Settings → Network → Settings → Set Up Internet Connection
+-2. Choose your connection (Wi-Fi or LAN), then Advanced Settings
+-3. Set Proxy Server to Use
+-4. Enter the IP address and port shown in the toolkit's terminal window and at the top of the control panel, for example `192.168.1.42` and `8080`
+-5. Save, then test the internet connection from the PS5's network settings screen
++Keep this terminal window open while you use the toolkit. Closing it stops
++everything. To stop on purpose, press `Ctrl+C` in that window, or use the Quit
++button in the control panel.
+ 
+-If the PS5 says it has no internet connection after this, check the troubleshooting section below before assuming something's broken.
++Next: [point your console at it](CONSOLES.md).
+ 
+ ## Troubleshooting
+ 
+-**PS5 says "no internet connection" after setting the proxy**
+-
+-- Double check the PS5 and this PC really are on the same network. If the PS5
+-  is connected to this PC's mobile hotspot, use the hotspot's IP address (the
+-  toolkit auto-detects and displays whichever one is right), not your main
+-  router's IP.
+-- Windows Firewall may be blocking the connection. Allow inbound TCP traffic
+-  on port 8080 for Python, or add a rule manually:
+-  ```
+-  New-NetFirewallRule -DisplayName "BO2 Emblem Toolkit" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow -Profile Private
+-  ```
+-  (run this in an elevated PowerShell window).
++**Console says "no internet connection" after setting the proxy**
++
++- Check the console and this computer really are on the same network. If the
++  console is connected to this computer's hotspot or Internet Sharing, use
++  *that* interface's address, not your main router-facing one. The control
++  panel lists every address it found — the sharing one is usually
++  `192.168.2.1` on macOS and `192.168.137.1` on Windows.
++- Your firewall may be blocking the connection:
++  - **Windows**: allow inbound TCP on port 8080 for Python, or add a rule in an
++    elevated PowerShell:
++    ```
++    New-NetFirewallRule -DisplayName "BO2 Emblem Toolkit" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow -Profile Private
++    ```
++  - **macOS**: System Settings → Network → Firewall → Options, and allow
++    incoming connections for Python or BO2EmblemToolkit.
+ - If you use an ad-blocking DNS service, it may be blocking PlayStation's own
+   telemetry domains, unrelated to this tool but easy to mistake for it.
+   Switching to a normal DNS resolver (e.g. 1.1.1.1) resolves this.
+ 
+ **The control panel doesn't show a LAN IP, or shows the wrong one**
+ 
+-Multiple network adapters (VPNs, virtual adapters, hotspot adapters) can
+-confuse auto-detection. Find the correct IP yourself:
++The panel lists every address it can find, with the outbound-route one first.
++If none of them work, or the list is empty, find it yourself:
+ 
+-- Windows: `ipconfig` in a terminal, look for the adapter connected to the
+-  same network as your PS5.
+-- macOS/Linux: `ifconfig` or `ip addr`.
++- Windows: `ipconfig`
++- macOS: `ipconfig getifaddr en0`, or `ifconfig` for the full list
++- Linux: `ip addr`
++
++Look for the adapter on the same network as your console.
++
++**"Address already in use" / the panel shows a proxy error**
++
++Something else on this computer already holds port 8080 or 8090. Either stop
++it, or run the toolkit on different ports:
++
++```
++BO2_PROXY_PORT=8081 BO2_WEB_PORT=8091 python3 run.py
++```
++
++on Windows:
++
++```
++set BO2_PROXY_PORT=8081 && set BO2_WEB_PORT=8091 && python run.py
++```
++
++Whatever you set `BO2_PROXY_PORT` to is what your console's proxy setting needs
++to say. The control panel's port moves on its own if it has to; the proxy's
++never does, since your console is configured with it by hand.
+ 
+ **"python is not recognized" / "command not found"**
+ 
+-Python isn't on your PATH. Reinstall Python and make sure to check "Add to
+-PATH" during setup (Windows), or use `python3` instead of `python`
+-(macOS/Linux).
++Python isn't on your PATH. Reinstall it and check "Add to PATH" during setup
++(Windows), or use `python3` instead of `python` (macOS/Linux).
++
++**macOS: "Operation not permitted" or the app won't launch at all**
++
++Usually quarantine — see [Gatekeeper](#gatekeeper) above. If it still won't
++launch, run the command-line binary from Terminal instead
++(`dist/cli/BO2EmblemToolkit`), which prints the actual error.
+diff --git a/docs/USAGE.md b/docs/USAGE.md
+index f9f54bc..492520e 100644
+--- a/docs/USAGE.md
++++ b/docs/USAGE.md
+@@ -1,6 +1,6 @@
+ # Using the BO2 Emblem Toolkit
+ 
+-This assumes you've already finished the one-time [install](INSTALL.md) and have the control panel open in your browser.
++This assumes you've already finished the one-time [install](INSTALL.md), [pointed your console at the proxy](CONSOLES.md), and have the control panel open in your browser.
+ 
+ ## The three modes
+ 
+@@ -15,7 +15,7 @@ Only one mode runs at a time.
+ ## Capturing an emblem
+ 
+ 1. Click Capture.
+-2. On your PS5, open the profile or channel of the player you want to copy from.
++2. On your console, open the profile or channel of the player you want to copy from.
+ 3. Their emblem shows up under "Your captured emblems" within a few seconds. Nothing else to do.
+ 4. A player can have more than one saved emblem. If so, each one shows up as its own card.
+ 
+@@ -25,7 +25,7 @@ Click the text under a card to rename it to something you'll recognize later, li
+ 
+ 1. Click the emblem card you want. A checkmark shows which one is selected. Only one can be selected at a time.
+ 2. Click Show.
+-3. Open your own emblem editor on the PS5, not another player's profile. The captured emblem loads there instead of your usual saved emblem.
++3. Open your own emblem editor on your console, not another player's profile. The captured emblem loads there instead of your usual saved emblem.
+ 4. Save it from the editor, the same way you'd save anything you built yourself. It's now permanently on your account.
+ 
+ You can change your selection at any point, in any mode. It takes effect as soon as you're in Show mode and reopen the editor.
+@@ -36,16 +36,21 @@ You can change your selection at any point, in any mode. It takes effect as soon
+ 
+ **It won't work if the emblem uses a shape you haven't unlocked.** Emblems are built from shapes, ranks, and weapon-qualification icons that Black Ops II normally only lets you use once you've earned them. If a captured emblem includes something your own account hasn't unlocked, the game may fail to load it, show it incorrectly, or refuse to save it. There's no way around this from the toolkit's side, since the game itself is enforcing it, not the proxy.
+ 
++**Nothing is being captured at all.**
++Open the "Console setup" section of the control panel. It says whether emblem
++traffic is reaching the proxy, and names the endpoint and console it detected.
++[docs/CONSOLES.md](CONSOLES.md#troubleshooting) walks through what each state means.
++
+ ## Questions
+ 
+ **Do I need to keep the terminal window open?**
+-Yes. Closing it stops the proxy and the control panel. You can minimize it.
++Yes. Closing it stops the proxy and the control panel. You can minimize it. The packaged macOS app has no terminal window — use the Quit button in the control panel to stop that one.
+ 
+ **Does this affect signing in or matchmaking?**
+ No. Only the plain-HTTP emblem-storage requests are touched. Everything else, including all HTTPS traffic like PSN sign-in, passes through unmodified and is never decrypted.
+ 
+-**Can I run this for more than one PS5?**
+-Yes. The proxy setting is per-console, so any number of PS5s on your network can point at the same running toolkit.
++**Can I run this for more than one console?**
++Yes. The proxy setting is per-console, so any number of consoles on your network can point at the same running toolkit, and they can be different models — a PS4 and a PS5 can share one toolkit and one pool of captures.
+ 
+ **I switched back to Off but I still see the captured emblem somewhere. Why?**
+-That's the PS5's own local cache still showing what it last loaded, not something the toolkit is still doing. Switching modes only changes what the proxy would serve on the next request, it doesn't force the console to ask again.
++That's the console's own local cache still showing what it last loaded, not something the toolkit is still doing. Switching modes only changes what the proxy would serve on the next request, it doesn't force the console to ask again.
+diff --git a/emblemtool/__init__.py b/emblemtool/__init__.py
+index 15324db..62f68f7 100644
+--- a/emblemtool/__init__.py
++++ b/emblemtool/__init__.py
+@@ -3,4 +3,4 @@
+ See README.md for what this is and docs/ for setup and usage instructions.
+ """
+ 
+-__version__ = "1.0.0"
++__version__ = "1.1.0"
+diff --git a/emblemtool/config.py b/emblemtool/config.py
+index aa6afe9..35a19e8 100644
+--- a/emblemtool/config.py
++++ b/emblemtool/config.py
+@@ -2,29 +2,105 @@
+ import os
+ import sys
+ 
+-# Where captures and the current mode are written. When running from source
+-# this is the repo root; when running as a frozen exe (PyInstaller), it's the
+-# folder the exe itself sits in, so saved emblems survive between runs
+-# instead of landing in the temp folder the exe unpacks itself into.
+-if getattr(sys, "frozen", False):
+-    ROOT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+-else:
+-    ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++APP_NAME = "BO2EmblemToolkit"
++
++IS_FROZEN = bool(getattr(sys, "frozen", False))
++IS_MACOS = sys.platform == "darwin"
++IS_WINDOWS = os.name == "nt"
++
++# True when running as a macOS .app bundle rather than a bare binary. Anything
++# written next to the executable in that case lands *inside* the bundle, where
++# it is invisible in Finder and thrown away when the app is replaced - so the
++# data directory has to move (see _default_data_dir).
++IS_MAC_APP_BUNDLE = IS_FROZEN and ".app/Contents/MacOS/" in os.path.abspath(sys.executable)
++
++
++def _exe_dir():
++    return os.path.dirname(os.path.abspath(sys.executable))
++
++
++def _repo_root():
++    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++
++
++def _user_data_dir():
++    """The per-user location this OS expects an app to keep its data in."""
++    if IS_MACOS:
++        return os.path.expanduser(f"~/Library/Application Support/{APP_NAME}")
++    if IS_WINDOWS:
++        base = os.environ.get("APPDATA") or os.path.expanduser("~")
++        return os.path.join(base, APP_NAME)
++    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
++    return os.path.join(base, APP_NAME)
++
++
++def _default_data_dir():
++    """Where captures and the current mode are written.
++
++    From source: the repo root, so everything stays next to the code.
++
++    Frozen: next to the executable, so saved emblems survive between runs
++    instead of landing in the temp folder a onefile build unpacks into. The
++    exception is a macOS .app bundle, which is a sealed, relocatable directory
++    that must be treated as read-only - those get the standard per-user
++    Application Support folder instead.
++
++    An existing `saved/` beside the executable always wins, so upgrading an
++    installation that already has captures never orphans them.
++    """
++    if not IS_FROZEN:
++        return _repo_root()
++    if IS_MAC_APP_BUNDLE:
++        beside_bundle = os.path.abspath(os.path.join(_exe_dir(), "..", "..", ".."))
++        if os.path.isdir(os.path.join(beside_bundle, "saved")):
++            return beside_bundle
++        return _user_data_dir()
++    return _exe_dir()
++
++
++# Override for anyone who wants captures somewhere specific (portable installs,
++# a shared folder, testing).
++ROOT_DIR = os.environ.get("BO2_TOOLKIT_DATA_DIR") or _default_data_dir()
+ 
+ # Where read-only bundled resources (shape reference images, LICENSE) live.
+ # PyInstaller unpacks these into a temp folder at startup (sys._MEIPASS);
+ # running from source, they're just files in the repo.
+-RESOURCE_DIR = getattr(sys, "_MEIPASS", ROOT_DIR)
++RESOURCE_DIR = getattr(sys, "_MEIPASS", _repo_root())
++
++# Unlike the repo root or an exe's own folder, the per-user data directory
++# doesn't exist until something makes it - and on macOS that's the normal
++# first-run state. Creating it here means every writer below can assume it.
++try:
++    os.makedirs(ROOT_DIR, exist_ok=True)
++except OSError:
++    pass  # surfaced properly when the first write fails
+ 
+ SAVED_DIR = os.path.join(ROOT_DIR, "saved")
+ SHAPES_DIR = os.path.join(RESOURCE_DIR, "reference_shapes")
+ STATE_FILE = os.path.join(ROOT_DIR, "state.txt")
++SETTINGS_FILE = os.path.join(ROOT_DIR, "settings.json")
+ 
+ ACTIVE_NAME = "_active"  # reserved pseudo-group: the currently armed injection set
+ 
++
++def _port(env_name, default):
++    try:
++        value = int(os.environ.get(env_name, ""))
++    except ValueError:
++        return default
++    return value if 1 <= value <= 65535 else default
++
++
+ PROXY_HOST = "0.0.0.0"
+-PROXY_PORT = 8080
++# Overridable because 8080/8090 are popular and something else may already
++# hold them - common on a dev machine, and macOS gives no useful error when
++# a port is taken by another user's process.
++PROXY_PORT = _port("BO2_PROXY_PORT", 8080)
+ WEB_HOST = "0.0.0.0"
+-WEB_PORT = 8090
++WEB_PORT = _port("BO2_WEB_PORT", 8090)
+ 
+-TARGET_HOST_SUBSTR = "ops2-ps3-cs.prod.demonware.net"
++# How long to wait on the console-facing and upstream sockets. Without these a
++# single wedged connection parks a thread forever; consoles drop connections
++# without closing them often enough for that to matter.
++CONNECT_TIMEOUT = 15
++READ_TIMEOUT = 30
+diff --git a/emblemtool/consoles.py b/emblemtool/consoles.py
+new file mode 100644
+index 0000000..aece3ee
+--- /dev/null
++++ b/emblemtool/consoles.py
+@@ -0,0 +1,216 @@
++"""Which console is on the other end, and how to recognise its emblem traffic.
++
++Black Ops II shipped in 2012 on PS3, Xbox 360, Wii U and PC, and was later
++re-released on PS4 and PS5 as ports of the PS3 build. Those ports talk to the
++same legacy Demonware backend, which is why emblems still copy between them.
++
++The catch is that the content-server *hostname* is per-SKU and isn't published
++anywhere. Pinning one hostname (this tool originally hardcoded the PS3 one,
++which is also what the PS5 port happens to use) means the proxy silently does
++nothing the moment a different SKU is in play. There is no way to know the
++PS4 port's hostname without capturing it from a PS4.
++
++So detection keys off the request *path* instead. Demonware emblem storage
++objects are always ".../u<hex>.slot_<n>", which is distinctive enough to
++identify on its own, on any host. A plain-HTTP request to a demonware.net host
++whose path looks like that is an emblem request, whatever console sent it.
++
++Hostnames are still listed per console, for three reasons: the control panel
++can show you what it expects, `guess_console_from_host` can name the console
++that actually connected, and anyone who wants belt-and-braces behaviour can
++pin a specific host in the control panel instead of using auto.
++"""
++import re
++
++# ".../u51b08745d269.slot_504?..." -> (userhash, slot number). This is the
++# real signature of an emblem request and the basis of auto-detection.
++EMBLEM_PATH_RE = re.compile(r"/(u[0-9a-fA-F]+)\.slot_(\d+)")
++
++# Any Demonware host. Emblem traffic only ever goes here, so this bounds what
++# auto-detection is willing to look at - no other host is ever inspected.
++DEMONWARE_HOST_RE = re.compile(r"(?:^|\.)demonware\.net$", re.IGNORECASE)
++
++# BO2 content servers follow "ops2-<platform>-cs[<n>].prod.demonware.net".
++# Used to name an unrecognised-but-plausible host in the log.
++BO2_HOST_RE = re.compile(r"^ops2-([a-z0-9]+)-cs\d*\.prod\.demonware\.net$", re.IGNORECASE)
++
++# The PS3 content server. The 2012 PS3 release and the PS4/PS5 ports of that
++# build are all known or expected to use it, since the ports kept the PS3
++# backend (that is exactly why emblems copy across those three).
++LEGACY_PS_HOST = "ops2-ps3-cs.prod.demonware.net"
++
++
++class Console:
++    """A console preset: what to expect on the wire, and how to set the
++    proxy up on that hardware."""
++
++    def __init__(self, key, name, hosts=(), proxy_steps=(), note=""):
++        self.key = key
++        self.name = name
++        self.hosts = tuple(hosts)
++        self.proxy_steps = tuple(proxy_steps)
++        self.note = note
++
++    def as_dict(self):
++        return {
++            "key": self.key,
++            "name": self.name,
++            "hosts": list(self.hosts),
++            "proxy_steps": list(self.proxy_steps),
++            "note": self.note,
++        }
++
++
++_PS5_STEPS = (
++    "Settings → Network → Settings → Set Up Internet Connection",
++    "Highlight your network, press the Options button, choose Advanced Settings",
++    "Set Proxy Server to Use",
++    "Enter the address and port shown above",
++    "Save, then run Test Internet Connection",
++)
++
++_PS4_STEPS = (
++    "Settings → Network → Set Up Internet Connection",
++    "Pick Use Wi-Fi or Use a LAN Cable, then choose Custom (not Easy — Easy skips the proxy screen)",
++    "IP Address Settings: Automatic · DHCP Host Name: Do Not Specify · DNS Settings: Automatic · MTU Settings: Automatic",
++    "Proxy Server: Use, then enter the address and port shown above",
++    "Save, then run Test Internet Connection",
++)
++
++_XBOX_STEPS = (
++    "Settings → General → Network settings → Advanced settings",
++    "Xbox has no proxy field — set up this PC's connection sharing or a DNS/gateway route to it instead",
++    "See docs/CONSOLES.md for the workaround",
++)
++
++_PC_STEPS = (
++    "Set the system proxy to the address and port shown above",
++    "Windows: Settings → Network & Internet → Proxy → Manual proxy setup",
++    "macOS: System Settings → Network → your connection → Details → Proxies → Web Proxy (HTTP)",
++)
++
++CONSOLES = {
++    "auto": Console(
++        key="auto",
++        name="Auto-detect",
++        hosts=(),
++        proxy_steps=(
++            "Point your console's proxy setting at the address and port shown above",
++            "Pick your console from the list to see its exact menu path",
++        ),
++        note="Recognises emblem traffic by its request path, so it works with any "
++             "console or SKU. This is the recommended setting.",
++    ),
++    "ps5": Console(
++        key="ps5",
++        name="PlayStation 5",
++        hosts=(LEGACY_PS_HOST,),
++        proxy_steps=_PS5_STEPS,
++        note="The PS5 port of BO2 uses the legacy PS3 content server.",
++    ),
++    "ps4": Console(
++        key="ps4",
++        name="PlayStation 4",
++        hosts=(LEGACY_PS_HOST, "ops2-ps4-cs.prod.demonware.net"),
++        proxy_steps=_PS4_STEPS,
++        note="The PS4 port is the same port of the PS3 build as the PS5 one, so it "
++             "is expected on the legacy PS3 content server. Its own hostname is "
++             "listed too in case Activision split the SKUs. If neither matches, "
++             "use Auto-detect — it does not care about the hostname.",
++    ),
++    "ps3": Console(
++        key="ps3",
++        name="PlayStation 3",
++        hosts=(LEGACY_PS_HOST,),
++        proxy_steps=(
++            "Settings → Network Settings → Internet Connection Settings → Custom",
++            "Accept the defaults until the Proxy Server screen",
++            "Proxy Server: Use, then enter the address and port shown above",
++            "Save, then test the connection",
++        ),
++        note="Emblem data written by a PS3 is big-endian; the renderer detects "
++             "that on its own.",
++    ),
++    "xbox": Console(
++        key="xbox",
++        name="Xbox 360 / Xbox One / Series",
++        hosts=("ops2-xbl-cs.prod.demonware.net", "ops2-xbox-cs.prod.demonware.net"),
++        proxy_steps=_XBOX_STEPS,
++        note="Xbox consoles have no proxy setting, so this needs a routing "
++             "workaround rather than a proxy field. Untested.",
++    ),
++    "pc": Console(
++        key="pc",
++        name="PC",
++        hosts=("ops2-pc-cs.prod.demonware.net",),
++        proxy_steps=_PC_STEPS,
++        note="Untested — the PC release was delisted, but the endpoint layout is "
++             "the same.",
++    ),
++}
++
++DEFAULT_CONSOLE = "auto"
++
++
++def get(key):
++    """The Console preset for `key`, falling back to auto for anything unknown."""
++    return CONSOLES.get((key or "").lower(), CONSOLES[DEFAULT_CONSOLE])
++
++
++def all_consoles():
++    """Every preset, auto first, for the control panel's picker."""
++    order = ["auto", "ps5", "ps4", "ps3", "xbox", "pc"]
++    return [CONSOLES[k].as_dict() for k in order if k in CONSOLES]
++
++
++def is_demonware(host):
++    return bool(DEMONWARE_HOST_RE.search((host or "").split(":")[0].strip()))
++
++
++def guess_console_from_host(host):
++    """Name the console a hostname belongs to, or None.
++
++    Matches the pinned host lists first, then falls back to reading the
++    platform token out of an "ops2-<platform>-cs" style hostname, so a SKU
++    nobody has seen yet still gets named rather than reported as unknown.
++    """
++    host = (host or "").split(":")[0].strip().lower()
++    if not host:
++        return None
++    for key in ("ps5", "ps4", "ps3", "xbox", "pc"):
++        if host in (h.lower() for h in CONSOLES[key].hosts):
++            # LEGACY_PS_HOST is shared by three presets; the first match (ps5)
++            # would be arbitrary, so report the platform token instead.
++            if host == LEGACY_PS_HOST.lower():
++                return "ps3"
++            return key
++    m = BO2_HOST_RE.match(host)
++    if m:
++        token = m.group(1).lower()
++        return {"xbl": "xbox", "xbox": "xbox"}.get(token, token)
++    return None
++
++
++def match_emblem_request(host, path, console_key=DEFAULT_CONSOLE):
++    """Decide whether this plain-HTTP request is a BO2 emblem fetch.
++
++    Returns (userhash, slot_number) when it is, or (None, None).
++
++    Auto mode accepts any demonware.net host whose path carries the emblem
++    object pattern. A pinned console accepts only its own hostnames, so it
++    behaves exactly like the original hardcoded check.
++    """
++    host = (host or "").split(":")[0].strip()
++    m = EMBLEM_PATH_RE.search(path or "")
++    if not m:
++        return None, None
++
++    console = get(console_key)
++    if console.key == DEFAULT_CONSOLE:
++        if not is_demonware(host):
++            return None, None
++    else:
++        if host.lower() not in (h.lower() for h in console.hosts):
++            return None, None
++
++    return m.group(1), int(m.group(2))
+diff --git a/emblemtool/proxy.py b/emblemtool/proxy.py
+index 6868403..cecfa25 100644
+--- a/emblemtool/proxy.py
++++ b/emblemtool/proxy.py
+@@ -1,30 +1,80 @@
+-"""The MITM proxy the PS5 points its network proxy setting at.
++"""The MITM proxy your console points its network proxy setting at.
+ 
+ HTTPS (CONNECT) traffic is tunneled raw and never decrypted, so PSN sign-in
+ and normal console functionality keep working untouched. Plain HTTP requests
+ to the Demonware emblem-storage endpoint are the only thing inspected: in
+ CAPTURE mode the real response is saved, in Show mode it's replaced with
+ whichever emblem is currently selected (see broadcast.py).
++
++Which requests count as emblem requests is decided in consoles.py, by the
++shape of the request path rather than a hardcoded hostname - see that module
++for why. The upshot here is that this file works with a PS3, PS4 or PS5
++without being told which one it's talking to.
+ """
+ import os
+-import re
+ import socket
+ import threading
+ import time
+ 
+ from . import config
++from . import consoles
++from . import settings
+ from .state import read_state
+ from .storage import get_or_create_capture_group, group_dir
+ from .broadcast import read_selected_data
+ 
+-# matches ".../u51b08745d269.slot_504?..." -> userhash, slot number
+-PATH_RE = re.compile(r"/(u[0-9a-fA-F]+)\.slot_(\d+)")
++# Kept for anything importing it; the live matching lives in consoles.py.
++PATH_RE = consoles.EMBLEM_PATH_RE
++
++# What we've actually seen on the wire, surfaced in the control panel so a user
++# whose console isn't being picked up can see whether emblem traffic is
++# reaching the proxy at all, and on which host.
++detected = {
++    "emblem_host": None,     # host the last emblem request went to
++    "console_guess": None,   # console that hostname belongs to, if recognisable
++    "last_seen": None,       # when, as HH:MM:SS
++    "requests": 0,           # emblem requests handled this run
++    "other_demonware": [],   # demonware hosts seen that were NOT emblem traffic
++}
++_detected_lock = threading.Lock()
++
++# Set if the proxy couldn't start at all, so the control panel can say so
++# instead of the user assuming their console settings are wrong.
++startup_error = None
+ 
+ 
+ def log(msg):
+     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
+ 
+ 
++def _note_emblem_host(host):
++    with _detected_lock:
++        if detected["emblem_host"] != host:
++            guess = consoles.guess_console_from_host(host)
++            detected["emblem_host"] = host
++            detected["console_guess"] = guess
++            named = f" ({guess.upper()})" if guess else ""
++            log(f"  emblem endpoint detected: {host}{named}")
++        detected["last_seen"] = time.strftime("%H:%M:%S")
++        detected["requests"] += 1
++
++
++def _note_other_demonware(host):
++    """Record a Demonware host that wasn't emblem traffic. True the first time
++    each host shows up, so the caller logs it once instead of every request."""
++    with _detected_lock:
++        seen = detected["other_demonware"]
++        if host in seen or len(seen) >= 20:
++            return False
++        seen.append(host)
++        return True
++
++
++def get_detected():
++    with _detected_lock:
++        return dict(detected, other_demonware=list(detected["other_demonware"]))
++
++
+ def pipe(src, dst):
+     try:
+         while True:
+@@ -42,6 +92,34 @@ def pipe(src, dst):
+                 pass
+ 
+ 
++def _tunnel(client, upstream):
++    """Splice two sockets together until either end goes away.
++
++    Both sockets go back to blocking with no timeout first: a tunnel can sit
++    idle for minutes at a time during matchmaking, and a timeout here would
++    tear down a perfectly healthy PSN connection.
++    """
++    client.settimeout(None)
++    upstream.settimeout(None)
++    t1 = threading.Thread(target=pipe, args=(upstream, client), daemon=True)
++    t2 = threading.Thread(target=pipe, args=(client, upstream), daemon=True)
++    t1.start(); t2.start()
++    t1.join(); t2.join()
++    # shutdown() alone leaves the descriptors open until the garbage collector
++    # gets to them. Every passed-through request goes through here, and a
++    # console makes a lot of them, so they have to be closed explicitly - macOS
++    # gives an app launched from Finder only 256 descriptors to work with.
++    try:
++        upstream.close()
++    except OSError:
++        pass
++
++
++def _connect_upstream(host, port):
++    sock = socket.create_connection((host, port), timeout=config.CONNECT_TIMEOUT)
++    return sock
++
++
+ def recv_full_response(sock):
+     data = b""
+     while b"\r\n\r\n" not in data:
+@@ -58,7 +136,10 @@ def recv_full_response(sock):
+     cl = None
+     for line in headers.split(b"\r\n"):
+         if line.lower().startswith(b"content-length:"):
+-            cl = int(line.split(b":", 1)[1].strip())
++            try:
++                cl = int(line.split(b":", 1)[1].strip())
++            except ValueError:
++                cl = None
+             break
+     if cl is not None:
+         while len(body) < cl:
+@@ -70,11 +151,13 @@ def recv_full_response(sock):
+ 
+ 
+ def fetch_real(req, host, port):
+-    upstream = socket.create_connection((host, port))
+-    upstream.sendall(req)
+-    headers, body = recv_full_response(upstream)
+-    upstream.close()
+-    return headers, body
++    upstream = _connect_upstream(host, port)
++    try:
++        upstream.settimeout(config.READ_TIMEOUT)
++        upstream.sendall(req)
++        return recv_full_response(upstream)
++    finally:
++        upstream.close()
+ 
+ 
+ def _req_header(req, name):
+@@ -88,18 +171,16 @@ def _req_header(req, name):
+     return None
+ 
+ 
+-def handle_target_request(client, req, host, port, path):
++def handle_target_request(client, req, host, port, path, userhash, slot_num):
+     mode = read_state()
+-    m = PATH_RE.search(path)
+-    slot_num = int(m.group(2)) if m else None
+-    userhash = m.group(1) if m else None
++    _note_emblem_host(host)
+ 
+-    if mode == "INJECT" and slot_num is not None:
++    if mode == "INJECT":
+         selected = read_selected_data()
+         if selected is not None:
+             client.sendall(selected)
+             # A conditional/cache-check request from the console is the main
+-            # reason Show mode can silently appear to do nothing - your PS5
++            # reason Show mode can silently appear to do nothing - your console
+             # already has a cached copy of one of your slots and may not ask
+             # again right away. Nothing to fix here, just worth noting.
+             if _req_header(req, "If-None-Match") or _req_header(req, "If-Modified-Since") or _req_header(req, "Range"):
+@@ -108,11 +189,11 @@ def handle_target_request(client, req, host, port, path):
+             else:
+                 log(f"  Show: sent selected emblem for slot_{slot_num} ({len(selected)} bytes)")
+             return
+-        log(f"  Show mode is on but no emblem is selected - passing real data through")
++        log("  Show mode is on but no emblem is selected - passing real data through")
+ 
+     headers, body = fetch_real(req, host, port)
+ 
+-    if mode == "CAPTURE" and slot_num is not None:
++    if mode == "CAPTURE":
+         group = get_or_create_capture_group(userhash)
+         with open(os.path.join(group_dir(group), f"slot_{slot_num}.bin"), "wb") as f:
+             f.write(headers + body)
+@@ -121,8 +202,32 @@ def handle_target_request(client, req, host, port, path):
+     client.sendall(headers + body)
+ 
+ 
++def _split_request_target(url, req):
++    """Work out (host, port, path) for a proxied request.
++
++    Proxies normally get the absolute form ("GET http://host/path HTTP/1.1"),
++    but the origin form with a Host header is legal and some clients send it.
++    The original code assumed absolute form and produced an empty host for the
++    other one, which silently broke those requests.
++    """
++    if "://" in url:
++        rest = url.split("://", 1)[1]
++        host_port, _, path = rest.partition("/")
++        path = "/" + path
++    else:
++        host_port = _req_header(req, "Host") or ""
++        path = url if url.startswith("/") else "/" + url
++    host, _, port = host_port.partition(":")
++    try:
++        port = int(port) if port else 80
++    except ValueError:
++        port = 80
++    return host, port, path
++
++
+ def handle(client):
+     try:
++        client.settimeout(config.READ_TIMEOUT)
+         req = b""
+         while b"\r\n\r\n" not in req:
+             chunk = client.recv(4096)
+@@ -139,56 +244,79 @@ def handle(client):
+ 
+         if method == "CONNECT":
+             host, _, port = parts[1].partition(":")
+-            if "demonware" in host.lower() and config.TARGET_HOST_SUBSTR not in host:
+-                log(f"  note: HTTPS traffic to {host} (not the expected emblem host '{config.TARGET_HOST_SUBSTR}') - tunneled untouched")
+-            port = int(port or 443)
+-            upstream = socket.create_connection((host, port))
++            try:
++                port = int(port) if port else 443
++            except ValueError:
++                port = 443
++            if consoles.is_demonware(host) and _note_other_demonware(host):
++                log(f"  note: HTTPS traffic to {host} - tunneled untouched, never decrypted")
++            upstream = _connect_upstream(host, port)
+             client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+-            t1 = threading.Thread(target=pipe, args=(upstream, client), daemon=True)
+-            t2 = threading.Thread(target=pipe, args=(client, upstream), daemon=True)
+-            t1.start(); t2.start()
+-            t1.join(); t2.join()
++            _tunnel(client, upstream)
+         else:
+-            url = parts[1]
+-            rest = url.split("://", 1)[1] if "://" in url else url
+-            host_port, _, path = rest.partition("/")
+-            host, _, port = host_port.partition(":")
+-            port = int(port or 80)
+-            path = "/" + path
++            host, port, path = _split_request_target(parts[1], req)
++            if not host:
++                client.close()
++                return
+ 
+             rest_of_req = req.split(b"\r\n", 1)[1]
+             new_line = f"{method} {path} HTTP/1.1\r\n".encode("latin1")
+             req_rewritten = new_line + rest_of_req
+ 
+-            if config.TARGET_HOST_SUBSTR in host:
+-                handle_target_request(client, req_rewritten, host, port, path)
++            console_key = settings.get_console()
++            userhash, slot_num = consoles.match_emblem_request(host, path, console_key)
++
++            if slot_num is not None:
++                handle_target_request(client, req_rewritten, host, port, path, userhash, slot_num)
+             else:
+-                if "demonware" in host.lower():
+-                    log(f"  note: HTTP request to {host}{path} (not the expected emblem host '{config.TARGET_HOST_SUBSTR}') - passed through untouched")
+-                upstream = socket.create_connection((host, port))
++                if consoles.is_demonware(host) and _note_other_demonware(host):
++                    log(f"  note: HTTP request to {host} - not emblem traffic, passed through untouched")
++                upstream = _connect_upstream(host, port)
+                 upstream.sendall(req_rewritten)
+-                t1 = threading.Thread(target=pipe, args=(upstream, client), daemon=True)
+-                t2 = threading.Thread(target=pipe, args=(client, upstream), daemon=True)
+-                t1.start(); t2.start()
+-                t1.join(); t2.join()
++                _tunnel(client, upstream)
+     except Exception as e:
+         log(f"  error: {e}")
+     finally:
+-        client.close()
++        try:
++            client.close()
++        except OSError:
++            pass
+ 
+ 
+ def serve(host=None, port=None):
+     """Run the proxy loop. Blocks forever - call from a dedicated thread."""
++    global startup_error
+     from .state import write_state
+-    if not os.path.exists(config.STATE_FILE):
+-        write_state("PASSTHROUGH")
+     host = host or config.PROXY_HOST
+     port = port or config.PROXY_PORT
+     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+-    srv.bind((host, port))
++    # Anything that goes wrong before the accept loop kills this thread, and a
++    # dead proxy thread looks exactly like a misconfigured console - nothing
++    # happens, with no explanation. So failures are recorded where the control
++    # panel can show them, which is the only channel a packaged app has.
++    try:
++        if not os.path.exists(config.STATE_FILE):
++            write_state("PASSTHROUGH")
++        srv.bind((host, port))
++    except OSError as e:
++        if getattr(e, "filename", None):
++            startup_error = (
++                f"The proxy couldn't write to {e.filename} ({e.strerror or e}). "
++                f"Check that {config.ROOT_DIR} exists and is writable."
++            )
++        else:
++            startup_error = (
++                f"The proxy couldn't listen on port {port} ({e.strerror or e}). "
++                f"Something else is probably using it. Stop that program, or restart "
++                f"with BO2_PROXY_PORT set to a free port."
++            )
++        log(f"  ERROR: {startup_error}")
++        srv.close()
++        return
+     srv.listen(200)
+-    log(f"Proxy listening on {host}:{port}  mode={read_state()}")
++    console = consoles.get(settings.get_console())
++    log(f"Proxy listening on {host}:{port}  mode={read_state()}  console={console.name}")
+     while True:
+         client, _ = srv.accept()
+         threading.Thread(target=handle, args=(client,), daemon=True).start()
+diff --git a/emblemtool/settings.py b/emblemtool/settings.py
+new file mode 100644
+index 0000000..a7ea6a6
+--- /dev/null
++++ b/emblemtool/settings.py
+@@ -0,0 +1,50 @@
++"""Small persisted settings store.
++
++Separate from state.py: state is the live mode and changes constantly, this is
++the handful of choices a user makes once (currently just which console they're
++on) and expects to still be there next time they open the tool.
++"""
++import json
++import os
++import threading
++
++from . import config
++from . import consoles
++
++_lock = threading.Lock()
++
++DEFAULTS = {
++    "console": consoles.DEFAULT_CONSOLE,
++}
++
++
++def read_settings():
++    try:
++        with open(config.SETTINGS_FILE) as f:
++            stored = json.load(f)
++    except (FileNotFoundError, json.JSONDecodeError):
++        stored = {}
++    if not isinstance(stored, dict):
++        stored = {}
++    return {**DEFAULTS, **stored}
++
++
++def write_settings(values):
++    with _lock:
++        current = read_settings()
++        current.update(values)
++        os.makedirs(os.path.dirname(config.SETTINGS_FILE) or ".", exist_ok=True)
++        with open(config.SETTINGS_FILE, "w") as f:
++            json.dump(current, f, indent=2)
++        return current
++
++
++def get_console():
++    """The console key the user picked, validated back to a known preset."""
++    return consoles.get(read_settings().get("console")).key
++
++
++def set_console(key):
++    resolved = consoles.get(key).key
++    write_settings({"console": resolved})
++    return resolved
+diff --git a/emblemtool/shapes/render.py b/emblemtool/shapes/render.py
+index 68b06d3..5c82eaa 100644
+--- a/emblemtool/shapes/render.py
++++ b/emblemtool/shapes/render.py
+@@ -7,6 +7,9 @@ render to ours - see the geometry note in render_png; a full 31-layer test
+ emblem matches the game at ~0.95 registered pixel correlation):
+   - Body is a 1408-byte blob (strip the HTTP response headers first).
+   - 32 fixed layer records, 44 bytes each.
++  - Byte order is whatever the console that wrote it uses - big-endian from a
++    PS3, little-endian from PC and the PS4/PS5 ports - so it's detected per
++    blob rather than assumed (see detect_endianness).
+   - Each layer: uint16 shapeId, 2 bytes padding, then 9 float32
+         (R, G, B, A, posX, posY, scaleX, scaleY, rotation),
+     then outlined(byte, bool), flipped(byte, bool), 2 bytes padding.
+@@ -45,16 +48,63 @@ _shape_cache = {}
+ 
+ def strip_http(data):
+     idx = data.find(b"\r\n\r\n")
+-    return data[idx + 4:] if idx >= 0 else data
+-
+-
+-def parse_slot_bytes(data):
++    if idx >= 0:
++        return data[idx + 4:]
++    idx = data.find(b"\n\n")
++    return data[idx + 2:] if idx >= 0 else data
++
++
++def _plausible(shape, f):
++    """Score one layer record as 'looks like real emblem data'.
++
++    Used to pick the byte order (below). Every field has a range the game
++    itself can't leave, so garbage from the wrong endianness fails several of
++    them at once - a float read backwards lands in the 1e30 range far more
++    often than in 0..1.
++    """
++    if shape == EMPTY_SHAPE:
++        return True
++    if not 0 <= shape < 4096:
++        return False
++    r, g, b, a, x, y, sx, sy, rot = f
++    return (
++        all(v == v and abs(v) < 1e6 for v in f)   # no NaN, no absurd magnitudes
++        and all(-0.01 <= c <= 1.01 for c in (r, g, b, a))
++        and all(abs(p) <= 4.0 for p in (x, y))
++        and all(-16.0 <= s <= 8.0 for s in (sx, sy))
++        and -720.0 <= rot <= 720.0
++    )
++
++
++def detect_endianness(body):
++    """Return "<" or ">" for the byte order this emblem blob is written in.
++
++    Black Ops II ran on the PS3's big-endian PowerPC and on little-endian x86
++    (PC, and the PS4/PS5 ports), and each writes its emblem records in native
++    order. Whichever order parses more layers into legal ranges is the right
++    one; little-endian wins ties, since that's what most captures are.
++    """
++    best, best_score = "<", -1
++    for order in ("<", ">"):
++        score = 0
++        for i in range(min(NUM_LAYERS, len(body) // LAYER_SIZE)):
++            rec = body[i * LAYER_SIZE:(i + 1) * LAYER_SIZE]
++            shape = struct.unpack(order + "H", rec[0:2])[0]
++            f = struct.unpack(order + "9f", rec[4:40])
++            score += _plausible(shape, f)
++        if score > best_score:
++            best, best_score = order, score
++    return best
++
++
++def parse_slot_bytes(data, order=None):
+     body = strip_http(data)
++    order = order or detect_endianness(body)
+     layers = []
+     for i in range(min(NUM_LAYERS, len(body) // LAYER_SIZE)):
+         rec = body[i * LAYER_SIZE:(i + 1) * LAYER_SIZE]
+-        shape = struct.unpack("<H", rec[0:2])[0]
+-        f = struct.unpack("<9f", rec[4:40])
++        shape = struct.unpack(order + "H", rec[0:2])[0]
++        f = struct.unpack(order + "9f", rec[4:40])
+         outlined, flipped = rec[40], rec[41]
+         if shape == EMPTY_SHAPE:
+             continue
+@@ -94,6 +144,12 @@ def _load_shape_image(shape_id):
+     return img
+ 
+ 
++def _byte(v):
++    """A 0..1 channel as a 0..255 int, clamped - captured data occasionally
++    sits a hair outside the range and PIL won't take an out-of-range value."""
++    return max(0, min(255, int(v * 255)))
++
++
+ def _tinted_shape(shape_id, r, g, b, a):
+     """White/alpha glyph -> RGBA tinted by (r,g,b), alpha = glyph_alpha * a."""
+     img = _load_shape_image(shape_id)
+@@ -101,9 +157,9 @@ def _tinted_shape(shape_id, r, g, b, a):
+         return None
+     lum, alpha = img.split()
+     rgba = Image.merge("RGBA", (
+-        lum.point(lambda p: int(r * 255)),
+-        lum.point(lambda p: int(g * 255)),
+-        lum.point(lambda p: int(b * 255)),
++        lum.point(lambda p: _byte(r)),
++        lum.point(lambda p: _byte(g)),
++        lum.point(lambda p: _byte(b)),
+         alpha.point(lambda p: int(p * max(0.0, min(1.0, a)))),
+     ))
+     return rgba
+@@ -153,7 +209,7 @@ def render_png(layers, size=256, bg=(24, 24, 24, 255)):
+         if placeholder:
+             a = max(0.0, min(1.0, L["a"]))
+             tinted = Image.new("RGBA", (256, 256), (
+-                int(L["r"] * 255), int(L["g"] * 255), int(L["b"] * 255), int(a * 255)
++                _byte(L["r"]), _byte(L["g"]), _byte(L["b"]), int(a * 255)
+             ))
+ 
+         if L["flipped"]:
+diff --git a/emblemtool/storage.py b/emblemtool/storage.py
+index 67704fd..2f3ed79 100644
+--- a/emblemtool/storage.py
++++ b/emblemtool/storage.py
+@@ -14,8 +14,20 @@ _capture_lock = threading.Lock()
+ 
+ _SLOT_RE = re.compile(r"^slot_(\d+)\.bin$")
+ 
++# Group names come back in from the control panel's URLs, and the panel listens
++# on the LAN (it has to - the console has to reach the proxy). Anything that
++# isn't a plain name we generated ourselves is refused here, at the one place
++# every group path is built, rather than trusted to each caller.
++_SAFE_GROUP_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
++
++
++def is_safe_group(name):
++    return bool(_SAFE_GROUP_RE.match(name or ""))
++
+ 
+ def group_dir(name):
++    if not is_safe_group(name):
++        raise ValueError(f"invalid group name: {name!r}")
+     return os.path.join(config.SAVED_DIR, name)
+ 
+ 
+@@ -39,7 +51,7 @@ def list_groups():
+     os.makedirs(config.SAVED_DIR, exist_ok=True)
+     names = [
+         d for d in os.listdir(config.SAVED_DIR)
+-        if os.path.isdir(group_dir(d)) and d != config.ACTIVE_NAME
++        if is_safe_group(d) and os.path.isdir(group_dir(d)) and d != config.ACTIVE_NAME
+     ]
+ 
+     def sort_key(n):
+diff --git a/emblemtool/web/netinfo.py b/emblemtool/web/netinfo.py
+index deb8d81..038dc23 100644
+--- a/emblemtool/web/netinfo.py
++++ b/emblemtool/web/netinfo.py
+@@ -1,7 +1,27 @@
+ """Best-effort LAN IP detection, so the web UI can tell the user exactly
+-what to type into their PS5's proxy settings without opening a terminal.
++what to type into their console's proxy settings without opening a terminal.
++
++One address isn't enough. The interface that reaches the internet is often not
++the one the console is on: a Mac sharing its connection to a console over
++Wi-Fi or Ethernet puts that console on bridge100 at 192.168.2.x while the
++default route goes out over something else entirely, and Windows mobile
++hotspots do the same thing. So the outbound-route address is offered first,
++and every other private address on the machine is listed after it.
+ """
++import re
+ import socket
++import subprocess
++import sys
++
++# Interfaces that exist to serve a directly-attached device - a console tethered
++# to this machine will be on one of these, and it's the address it needs.
++_SHARING_HINTS = {
++    "bridge": "Internet Sharing / bridge",
++    "ap": "access point",
++    "wlan": "Wi-Fi",
++    "en": "Ethernet or Wi-Fi",
++    "eth": "Ethernet",
++}
+ 
+ 
+ def get_lan_ip():
+@@ -17,3 +37,137 @@ def get_lan_ip():
+         return None
+     finally:
+         s.close()
++
++
++def _is_private(ip):
++    if ip.startswith("10.") or ip.startswith("192.168."):
++        return True
++    if ip.startswith("172."):
++        try:
++            return 16 <= int(ip.split(".")[1]) <= 31
++        except (IndexError, ValueError):
++            return False
++    return False
++
++
++def _is_usable(ip):
++    return (
++        bool(ip)
++        and not ip.startswith("127.")
++        and not ip.startswith("169.254.")  # link-local: never routable to a console
++        and ip != "0.0.0.0"
++    )
++
++
++def _run(cmd):
++    try:
++        out = subprocess.run(
++            cmd, capture_output=True, text=True, timeout=5,
++            stdin=subprocess.DEVNULL,
++        )
++        return out.stdout or ""
++    except (OSError, subprocess.SubprocessError):
++        return ""
++
++
++def _interface_addresses():
++    """[(interface, ipv4), ...] for every interface, best effort per OS."""
++    pairs = []
++
++    if sys.platform == "darwin" or "bsd" in sys.platform:
++        # ifconfig blocks are "en0: flags=..." followed by indented "inet x.x.x.x"
++        current = None
++        for line in _run(["ifconfig"]).splitlines():
++            m = re.match(r"^(\S+):", line)
++            if m:
++                current = m.group(1)
++                continue
++            m = re.search(r"^\s+inet (\d+\.\d+\.\d+\.\d+)", line)
++            if m and current:
++                pairs.append((current, m.group(1)))
++
++    elif sys.platform.startswith("linux"):
++        for line in _run(["ip", "-4", "-o", "addr", "show"]).splitlines():
++            m = re.match(r"^\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)", line)
++            if m:
++                pairs.append((m.group(1), m.group(2)))
++        if not pairs:  # very old or minimal systems without iproute2
++            current = None
++            for line in _run(["ifconfig"]).splitlines():
++                m = re.match(r"^(\S+)", line)
++                if m and not line.startswith((" ", "\t")):
++                    current = m.group(1).rstrip(":")
++                m = re.search(r"inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)", line)
++                if m and current:
++                    pairs.append((current, m.group(1)))
++
++    elif sys.platform == "win32":
++        current = None
++        for line in _run(["ipconfig"]).splitlines():
++            if line and not line.startswith(" "):
++                current = line.strip().rstrip(":")
++                continue
++            m = re.search(r"IPv4 Address[^:]*:\s*(\d+\.\d+\.\d+\.\d+)", line)
++            if m:
++                pairs.append((current or "network adapter", m.group(1)))
++
++    if not pairs:
++        # Last resort - misses most interfaces on macOS but costs nothing.
++        try:
++            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
++                pairs.append(("", info[4][0]))
++        except (OSError, socket.gaierror):
++            pass
++
++    return [(iface, ip) for iface, ip in pairs if _is_usable(ip)]
++
++
++def _label_for(iface, ip, is_primary):
++    if is_primary:
++        return "this machine's main network — try this one first"
++    lowered = (iface or "").lower()
++    for hint, text in _SHARING_HINTS.items():
++        if lowered.startswith(hint):
++            base = f"{iface} ({text})"
++            break
++    else:
++        base = iface or "other interface"
++    if not _is_private(ip):
++        return f"{base} — public address, almost certainly not the one"
++    if lowered.startswith("bridge"):
++        return f"{base} — use this if the console is tethered to this machine"
++    return base
++
++
++def get_lan_ips():
++    """Every address a console could plausibly be told to use, best first.
++
++    Returns [{"ip", "interface", "label", "primary"}, ...].
++    """
++    primary = get_lan_ip()
++    seen = {}
++
++    if _is_usable(primary):
++        seen[primary] = {
++            "ip": primary,
++            "interface": "",
++            "label": _label_for("", primary, True),
++            "primary": True,
++        }
++
++    for iface, ip in _interface_addresses():
++        if ip in seen:
++            if not seen[ip]["interface"]:
++                seen[ip]["interface"] = iface
++            continue
++        seen[ip] = {
++            "ip": ip,
++            "interface": iface,
++            "label": _label_for(iface, ip, False),
++            "primary": False,
++        }
++
++    entries = list(seen.values())
++    # Primary first, then private addresses, then anything else.
++    entries.sort(key=lambda e: (not e["primary"], not _is_private(e["ip"]), e["ip"]))
++    return entries
+diff --git a/emblemtool/web/server.py b/emblemtool/web/server.py
+index 447f057..da009ed 100644
+--- a/emblemtool/web/server.py
++++ b/emblemtool/web/server.py
+@@ -6,20 +6,28 @@ import http.server
+ import json
+ import mimetypes
+ import os
++import threading
+ import urllib.parse
+ 
+ from .. import config
++from .. import consoles
++from .. import proxy
++from .. import settings
+ from ..state import read_state, write_state
+-from ..storage import list_emblems, group_dir, set_emblem_label
++from ..storage import list_emblems, group_dir, is_safe_group, set_emblem_label
+ from ..broadcast import select_emblem, clear_selection, read_selection
+ from ..shapes import render as emblem_render
+-from .netinfo import get_lan_ip
++from .netinfo import get_lan_ip, get_lan_ips
+ 
+ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+ 
+ _MODE_TO_INTERNAL = {"off": "PASSTHROUGH", "capture": "CAPTURE", "inject": "INJECT"}
+ _MODE_TO_PUBLIC = {v: k for k, v in _MODE_TO_INTERNAL.items()}
+ 
++# Set by make_server so /api/quit can stop the process. A packaged macOS .app
++# has no terminal to press Ctrl+C in, so the panel needs its own way out.
++_server = None
++
+ 
+ class Handler(http.server.BaseHTTPRequestHandler):
+     def log_message(self, fmt, *args):
+@@ -52,11 +60,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
+         except json.JSONDecodeError:
+             return {}
+ 
++    def _slot_path(self, group, slot):
++        """Path to one captured slot file, or None if the request named a
++        group or slot we didn't generate. The panel is reachable from the LAN,
++        so neither value is trusted enough to put straight into a path."""
++        if not is_safe_group(group):
++            return None
++        try:
++            slot = int(slot)
++        except (TypeError, ValueError):
++            return None
++        return os.path.join(group_dir(group), f"slot_{slot}.bin")
++
+     def _serve_static(self, rel_path):
+         if rel_path == "":
+             rel_path = "index.html"
+         full = os.path.normpath(os.path.join(STATIC_DIR, rel_path))
+-        if not full.startswith(STATIC_DIR) or not os.path.isfile(full):
++        if os.path.commonpath([full, STATIC_DIR]) != STATIC_DIR or not os.path.isfile(full):
+             self._json({"error": "not found"}, 404)
+             return
+         ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+@@ -69,19 +89,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
+         path = urllib.parse.urlparse(self.path).path
+ 
+         if path == "/api/status":
++            # Polled every few seconds, so everything here has to be cheap -
++            # the LAN address list isn't, and lives in /api/network-info.
+             self._json({
+                 "mode": _MODE_TO_PUBLIC.get(read_state(), "off"),
+                 "selected": read_selection(),
++                "console": settings.get_console(),
++                "detected": proxy.get_detected(),
++                "proxy_error": proxy.startup_error,
+             })
+ 
+         elif path == "/api/emblems":
+             self._json(list_emblems())
+ 
+         elif path == "/api/network-info":
++            console = consoles.get(settings.get_console())
+             self._json({
+                 "lan_ip": get_lan_ip(),
++                "lan_ips": get_lan_ips(),
+                 "proxy_port": config.PROXY_PORT,
+                 "web_port": config.WEB_PORT,
++                "console": console.as_dict(),
++                "consoles": consoles.all_consoles(),
++                "detected": proxy.get_detected(),
++            })
++
++        elif path == "/api/consoles":
++            self._json({
++                "selected": settings.get_console(),
++                "consoles": consoles.all_consoles(),
+             })
+ 
+         elif path == "/LICENSE":
+@@ -97,8 +133,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
+             if len(bits) == 5:
+                 group = urllib.parse.unquote(bits[3])
+                 slot = bits[4].removesuffix(".png")
+-                slot_path = os.path.join(group_dir(group), f"slot_{slot}.bin")
+-                if os.path.exists(slot_path):
++                slot_path = self._slot_path(group, slot)
++                if slot_path and os.path.exists(slot_path):
+                     try:
+                         body = emblem_render.render_file_png_bytes(slot_path, size=220)
+                         self._bytes(body, "image/png")
+@@ -134,8 +170,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
+ 
+         elif path == "/api/select":
+             group, slot = body.get("group"), body.get("slot")
+-            slot_path = os.path.join(group_dir(group or ""), f"slot_{slot}.bin")
+-            if not group or slot is None or not os.path.exists(slot_path):
++            slot_path = self._slot_path(group, slot)
++            if not slot_path or not os.path.exists(slot_path):
+                 self._json({"ok": False, "error": "not found"}, 404)
+                 return
+             select_emblem(group, int(slot))
+@@ -145,15 +181,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
+             clear_selection()
+             self._json({"ok": True})
+ 
++        elif path == "/api/console":
++            resolved = settings.set_console(body.get("console"))
++            self._json({"ok": True, "console": consoles.get(resolved).as_dict()})
++
++        elif path == "/api/quit":
++            # Reply before stopping, so the panel gets a clean response, and
++            # stop from another thread since serve_forever is on this one.
++            self._json({"ok": True})
++            if _server is not None:
++                threading.Thread(target=_server.shutdown, daemon=True).start()
++
+         elif path.startswith("/api/emblems/") and path.endswith("/label"):
+             bits = path.split("/")
+             # /api/emblems/<group>/<slot>/label
+             if len(bits) == 6:
+                 group = urllib.parse.unquote(bits[3])
+-                slot = bits[4]
+-                set_emblem_label(group, int(slot), (body.get("label") or "").strip())
+-                self._json({"ok": True})
+-                return
++                if self._slot_path(group, bits[4]):
++                    set_emblem_label(group, int(bits[4]), (body.get("label") or "").strip())
++                    self._json({"ok": True})
++                    return
+             self._json({"ok": False, "error": "bad request"}, 400)
+ 
+         else:
+@@ -161,6 +208,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
+ 
+ 
+ def make_server(host=None, port=None):
++    global _server
+     host = host or config.WEB_HOST
+     port = port or config.WEB_PORT
+-    return http.server.ThreadingHTTPServer((host, port), Handler)
++    _server = http.server.ThreadingHTTPServer((host, port), Handler)
++    return _server
+diff --git a/emblemtool/web/static/app.js b/emblemtool/web/static/app.js
+index 32e591a..87f2c72 100644
+--- a/emblemtool/web/static/app.js
++++ b/emblemtool/web/static/app.js
+@@ -4,12 +4,14 @@
+ 
+ const modeHints = {
+   off: "The proxy is transparent. Nothing is captured or changed.",
+-  capture: "Open a player's profile or channel on your PS5 - their emblem is saved below automatically.",
+-  inject: "Open your own emblem editor on the PS5. The selected emblem below loads there, ready to save.",
++  capture: "Open a player's profile or channel on your console - their emblem is saved below automatically.",
++  inject: "Open your own emblem editor on the console. The selected emblem below loads there, ready to save.",
+ };
+ 
+ let currentStatus = null;
+ let currentEmblems = [];
++let networkInfo = null;
++let stopped = false;
+ 
+ async function getJSON(url) {
+   const r = await fetch(url);
+@@ -24,14 +26,112 @@ async function postJSON(url, body) {
+   return r.json();
+ }
+ 
+-// ---------- network info ----------
++// ---------- network / console setup ----------
++
++function renderIpList(info) {
++  const list = document.getElementById("ipList");
++  const tpl = document.getElementById("ipRowTpl");
++  const addresses = info.lan_ips && info.lan_ips.length
++    ? info.lan_ips
++    : (info.lan_ip ? [{ ip: info.lan_ip, label: "", primary: true }] : []);
++
++  list.innerHTML = "";
++  if (!addresses.length) {
++    list.innerHTML = '<p class="muted">Couldn\'t detect any usable address. See docs/INSTALL.md for finding it yourself.</p>';
++    return;
++  }
++  for (const entry of addresses) {
++    const node = tpl.content.cloneNode(true);
++    const row = node.querySelector(".ip-row");
++    row.classList.toggle("primary", !!entry.primary);
++    node.querySelector(".ip-value").textContent = `${entry.ip} : ${info.proxy_port}`;
++    node.querySelector(".ip-label").textContent = entry.label || "";
++    list.appendChild(node);
++  }
++}
++
++function renderConsolePicker(info) {
++  const select = document.getElementById("consoleSelect");
++  if (!select.options.length) {
++    for (const c of info.consoles) {
++      const opt = document.createElement("option");
++      opt.value = c.key;
++      opt.textContent = c.name;
++      select.appendChild(opt);
++    }
++    select.addEventListener("change", async () => {
++      await postJSON("/api/console", { console: select.value });
++      await loadNetworkInfo();
++    });
++  }
++  select.value = info.console.key;
++
++  document.getElementById("consoleNote").textContent = info.console.note || "";
++
++  const steps = document.getElementById("consoleSteps");
++  steps.innerHTML = "";
++  for (const step of info.console.proxy_steps) {
++    const li = document.createElement("li");
++    li.textContent = step;
++    steps.appendChild(li);
++  }
++}
+ 
+ async function loadNetworkInfo() {
+-  const info = await getJSON("/api/network-info");
++  networkInfo = await getJSON("/api/network-info");
+   const el = document.getElementById("setupValue");
+-  el.textContent = info.lan_ip
+-    ? `${info.lan_ip} : ${info.proxy_port}`
+-    : "couldn't detect - see docs/INSTALL.md";
++  el.textContent = networkInfo.lan_ip
++    ? `${networkInfo.lan_ip} : ${networkInfo.proxy_port}`
++    : "couldn't detect - open Console setup";
++  renderIpList(networkInfo);
++  renderConsolePicker(networkInfo);
++  renderDetection();
++}
++
++// Live feedback on whether the console's traffic is actually arriving. Without
++// this the only failure signal is "nothing happens", which is the same thing
++// a wrong IP, a firewall block and a wrong mode all look like.
++function renderDetection() {
++  const detected = currentStatus && currentStatus.detected;
++  const pill = document.getElementById("detectPill");
++  const detail = document.getElementById("detectDetail");
++  if (!detected) return;
++
++  if (detected.emblem_host) {
++    const who = detected.console_guess ? detected.console_guess.toUpperCase() : "unknown console";
++    pill.textContent = `emblem traffic seen · ${who}`;
++    pill.classList.add("ok");
++    detail.textContent =
++      `${detected.requests} emblem request(s) handled, most recently at ${detected.last_seen}. ` +
++      `Endpoint: ${detected.emblem_host} (${who}).`;
++  } else if (detected.other_demonware && detected.other_demonware.length) {
++    pill.textContent = "console connected, no emblem traffic yet";
++    pill.classList.remove("ok");
++    detail.textContent =
++      "Traffic is reaching the proxy, so the network side is set up correctly, but no emblem " +
++      "request has come through yet. Open a player's profile (Capture) or your own emblem editor (Show). " +
++      "Seen so far: " + detected.other_demonware.join(", ");
++  } else {
++    pill.textContent = "waiting for emblem traffic";
++    pill.classList.remove("ok");
++    detail.textContent =
++      "Nothing has reached the proxy yet. If the console has been online for a while with the proxy " +
++      "set, check the address above and your firewall.";
++  }
++}
++
++function renderProxyError() {
++  const existing = document.getElementById("proxyError");
++  const message = currentStatus && currentStatus.proxy_error;
++  if (!message) {
++    if (existing) existing.remove();
++    return;
++  }
++  const box = existing || document.createElement("div");
++  box.id = "proxyError";
++  box.className = "error-box";
++  box.textContent = message;
++  if (!existing) document.querySelector("main").prepend(box);
+ }
+ 
+ // ---------- mode ----------
+@@ -52,6 +152,23 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
+   btn.addEventListener("click", () => setMode(btn.dataset.mode));
+ });
+ 
++// ---------- quit ----------
++// A packaged app has no terminal window to Ctrl+C, so the panel needs its own
++// way to stop the proxy.
++document.getElementById("quitBtn").addEventListener("click", async () => {
++  if (!confirm("Stop the proxy and control panel?\n\nSet your console's proxy back to Off first, or it will lose its internet connection.")) return;
++  stopped = true;
++  try {
++    await postJSON("/api/quit", {});
++  } catch (e) {
++    // The server closing the connection mid-reply is a normal outcome here.
++  }
++  document.body.innerHTML =
++    '<div class="stopped-screen"><h1>Stopped</h1>' +
++    "<p>The proxy and control panel have shut down. Remember to set your console's " +
++    "proxy setting back to Do Not Use.</p></div>";
++});
++
+ // ---------- emblem list (flat, single-select) ----------
+ 
+ function fmtDate(s) {
+@@ -102,18 +219,24 @@ document.getElementById("refreshBtn").addEventListener("click", refreshAll);
+ async function refreshStatus() {
+   currentStatus = await getJSON("/api/status");
+   renderMode();
++  renderDetection();
++  renderProxyError();
+   if (currentEmblems.length) renderEmblems();
+ }
+ 
+ async function refreshAll() {
++  if (stopped) return;
+   [currentStatus, currentEmblems] = await Promise.all([
+     getJSON("/api/status"),
+     getJSON("/api/emblems"),
+   ]);
+   renderMode();
++  renderDetection();
++  renderProxyError();
+   renderEmblems();
+ }
+ 
+-loadNetworkInfo();
+-refreshAll();
+-setInterval(refreshAll, 5000);
++refreshAll().then(loadNetworkInfo);
++setInterval(() => {
++  refreshAll().catch(() => {});
++}, 5000);
+diff --git a/emblemtool/web/static/index.html b/emblemtool/web/static/index.html
+index 4cdf1cb..885d67b 100644
+--- a/emblemtool/web/static/index.html
++++ b/emblemtool/web/static/index.html
+@@ -16,14 +16,42 @@
+       <p class="tagline">Copy another player's Black Ops II emblem onto your own account</p>
+     </div>
+   </div>
+-  <div class="setup-box" id="setupBox">
+-    <span class="setup-label">PS5 proxy setting</span>
+-    <span class="setup-value" id="setupValue">detecting…</span>
++  <div class="topbar-right">
++    <div class="setup-box" id="setupBox">
++      <span class="setup-label">Console proxy setting</span>
++      <span class="setup-value" id="setupValue">detecting…</span>
++    </div>
++    <button class="btn btn-ghost btn-small" id="quitBtn" title="Stop the proxy and control panel">Quit</button>
+   </div>
+ </header>
+ 
+ <main>
+ 
++  <details class="card setup-card" id="setupCard">
++    <summary>
++      <span class="summary-title">Console setup</span>
++      <span class="detect-pill" id="detectPill">waiting for emblem traffic</span>
++    </summary>
++
++    <div class="setup-body">
++      <div class="setup-row">
++        <label for="consoleSelect">Your console</label>
++        <select id="consoleSelect"></select>
++      </div>
++      <p class="muted" id="consoleNote"></p>
++
++      <h3>Point it at this computer</h3>
++      <p class="muted">Use the first address unless your console is tethered directly to this computer, in which case use the sharing address.</p>
++      <div class="ip-list" id="ipList"></div>
++
++      <h3>Where to put it</h3>
++      <ol class="steps" id="consoleSteps"></ol>
++
++      <h3>Is it working?</h3>
++      <p class="muted" id="detectDetail">No emblem requests have reached the proxy yet. That's expected until you open a player's profile or your own emblem editor with the console pointed here.</p>
++    </div>
++  </details>
++
+   <section class="card mode-card">
+     <h2>Mode</h2>
+     <div class="mode-grid">
+@@ -56,7 +84,7 @@
+       <button class="btn btn-ghost btn-small" id="refreshBtn">Refresh</button>
+     </div>
+     <p class="muted">Click one to select it. Once you switch to <strong>Show</strong> and open your own emblem editor, this is the emblem that loads there, ready to save as your own.</p>
+-    <p class="muted" id="emblemsEmpty">No emblems captured yet. Switch to <strong>Capture</strong> mode, then open a player's profile on your PS5.</p>
++    <p class="muted" id="emblemsEmpty">No emblems captured yet. Switch to <strong>Capture</strong> mode, then open a player's profile on your console.</p>
+     <div class="emblem-list" id="emblemList"></div>
+   </section>
+ 
+@@ -66,7 +94,7 @@
+   <p>
+     BO2 Emblem Toolkit — created by <a href="https://github.com/alexkotr1" target="_blank" rel="noopener">alexkotr1</a>.
+     Licensed under the <a href="/LICENSE" target="_blank" rel="noopener">MIT License</a> — free to use and modify, credit appreciated.
+-    For personal use on your own PS5 and network.
++    For personal use on your own console and network.
+   </p>
+ </footer>
+ 
+@@ -79,6 +107,13 @@
+   </div>
+ </template>
+ 
++<template id="ipRowTpl">
++  <div class="ip-row">
++    <code class="ip-value"></code>
++    <span class="ip-label"></span>
++  </div>
++</template>
++
+ <script src="/app.js"></script>
+ </body>
+ </html>
+diff --git a/emblemtool/web/static/style.css b/emblemtool/web/static/style.css
+index fac165b..a54ec13 100644
+--- a/emblemtool/web/static/style.css
++++ b/emblemtool/web/static/style.css
+@@ -234,7 +234,101 @@ footer {
+ footer a { color: var(--accent); text-decoration: none; }
+ footer a:hover { text-decoration: underline; }
+ 
++/* ---------- console setup panel ---------- */
++
++.topbar-right { display: flex; align-items: center; gap: 12px; }
++
++.setup-card { padding: 0; }
++.setup-card > summary {
++  list-style: none;
++  cursor: pointer;
++  padding: 18px 24px;
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 12px;
++  flex-wrap: wrap;
++}
++.setup-card > summary::-webkit-details-marker { display: none; }
++.summary-title {
++  font-size: 15px;
++  text-transform: uppercase;
++  letter-spacing: 0.6px;
++  color: var(--muted);
++  font-weight: 700;
++}
++.setup-card[open] > summary { border-bottom: 1px solid var(--border); }
++
++.detect-pill {
++  font-size: 12px;
++  padding: 4px 10px;
++  border-radius: 999px;
++  background: var(--panel-2);
++  border: 1px solid var(--border);
++  color: var(--muted);
++}
++.detect-pill.ok { color: var(--green); border-color: rgba(46,204,113,0.4); background: rgba(46,204,113,0.1); }
++
++.setup-body { padding: 18px 24px 22px; display: flex; flex-direction: column; gap: 8px; }
++.setup-body h3 {
++  margin: 12px 0 0;
++  font-size: 12px;
++  text-transform: uppercase;
++  letter-spacing: 0.6px;
++  color: var(--muted);
++}
++
++.setup-row { display: flex; align-items: center; gap: 12px; }
++.setup-row label { font-size: 13px; color: var(--muted); }
++.setup-row select {
++  background: var(--panel-2);
++  color: var(--text);
++  border: 1px solid var(--border);
++  border-radius: var(--radius-sm);
++  padding: 8px 12px;
++  font-size: 14px;
++  font-family: inherit;
++}
++
++.ip-list { display: flex; flex-direction: column; gap: 6px; }
++.ip-row {
++  display: flex;
++  align-items: baseline;
++  gap: 12px;
++  padding: 8px 12px;
++  background: var(--panel-2);
++  border: 1px solid var(--border);
++  border-radius: var(--radius-sm);
++  flex-wrap: wrap;
++}
++.ip-row.primary { border-color: rgba(255,128,0,0.45); }
++.ip-value { font-family: "SF Mono", Consolas, monospace; font-size: 14px; font-weight: 700; color: var(--accent); }
++.ip-label { font-size: 12px; color: var(--muted); }
++
++.steps { margin: 4px 0 0; padding-left: 20px; color: var(--text); font-size: 13px; }
++.steps li { margin-bottom: 5px; }
++
++.error-box {
++  padding: 14px 18px;
++  border: 1px solid #5a2020;
++  background: #2a1010;
++  border-radius: var(--radius-sm);
++  color: #f0a0a0;
++  font-size: 13px;
++  line-height: 1.5;
++}
++
++.stopped-screen {
++  max-width: 520px;
++  margin: 120px auto;
++  padding: 0 24px;
++  text-align: center;
++}
++.stopped-screen h1 { font-size: 22px; margin-bottom: 8px; }
++.stopped-screen p { color: var(--muted); font-size: 14px; }
++
+ @media (max-width: 720px) {
+   .mode-grid { grid-template-columns: 1fr; }
+   .topbar { flex-direction: column; align-items: flex-start; }
++  .topbar-right { width: 100%; justify-content: space-between; }
+ }
+diff --git a/run.py b/run.py
+index b7a167a..c0637f1 100644
+--- a/run.py
++++ b/run.py
+@@ -3,48 +3,114 @@
+ 
+ This is the only thing you ever need to run. It starts the network proxy
+ and the web control panel together, then opens the panel in your browser.
+-See README.md for what this does and docs/INSTALL.md for PS5 setup.
++See README.md for what this does, docs/INSTALL.md for setup on your computer,
++and docs/CONSOLES.md for pointing a PS3/PS4/PS5 at it.
+ """
++import sys
+ import threading
+ import time
+ import webbrowser
+ 
+ from emblemtool import config
++from emblemtool import consoles
++from emblemtool import settings
+ from emblemtool.proxy import serve as serve_proxy
+ from emblemtool.web.server import make_server
+-from emblemtool.web.netinfo import get_lan_ip
++from emblemtool.web.netinfo import get_lan_ips
+ 
+ 
+-def main():
+-    proxy_thread = threading.Thread(target=serve_proxy, daemon=True)
+-    proxy_thread.start()
++def _raise_fd_limit():
++    """Ask for more open files than the default, where the OS allows it.
++
++    A console generates a steady stream of short-lived connections and each
++    one briefly holds two descriptors. macOS starts a Finder-launched app with
++    a soft limit of 256, which a busy session can reach; raising the soft limit
++    toward the hard one needs no privileges.
++    """
++    try:
++        import resource
++    except ImportError:
++        return  # Windows: no such limit to raise
++    try:
++        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
++        target = min(4096, hard) if hard != resource.RLIM_INFINITY else 4096
++        if soft < target:
++            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
++    except (ValueError, OSError):
++        pass
++
+ 
+-    lan_ip = get_lan_ip()
+-    print("=" * 60)
++def _print_banner(web_port):
++    console = consoles.get(settings.get_console())
++    addresses = get_lan_ips()
++
++    print("=" * 64)
+     print(" BO2 Emblem Toolkit")
+-    print("=" * 60)
+-    print(f" Control panel : http://localhost:{config.WEB_PORT}")
+-    if lan_ip:
+-        print(f" PS5 proxy setting -> {lan_ip} : {config.PROXY_PORT}")
++    print("=" * 64)
++    print(f" Control panel  : http://localhost:{web_port}")
++    print(f" Console        : {console.name}")
++    if addresses:
++        print(f" Proxy setting  : {addresses[0]['ip']} : {config.PROXY_PORT}")
++        # More than one candidate is normal (Internet Sharing, VPNs, virtual
++        # adapters) and picking the wrong one is the single most common reason
++        # a console reports no internet, so show them all rather than guess.
++        for entry in addresses[1:]:
++            label = f" ({entry['interface']})" if entry["interface"] else ""
++            print(f"                  or {entry['ip']}{label}")
+     else:
+-        print(f" PS5 proxy setting -> <this PC's LAN IP> : {config.PROXY_PORT}")
+-        print("   (couldn't auto-detect your LAN IP - see docs/INSTALL.md)")
+-    print("=" * 60)
+-    print(" Press Ctrl+C to stop.")
++        print(f" Proxy setting  : <this computer's LAN IP> : {config.PROXY_PORT}")
++        print("                  (couldn't auto-detect - see docs/INSTALL.md)")
++    print(f" Saving data to : {config.ROOT_DIR}")
++    print("=" * 64)
++    print(" Press Ctrl+C to stop, or use Quit in the control panel.")
+     print()
+ 
++
++def _start_web_server():
++    """The control panel, on the first free port from WEB_PORT upwards.
++
++    Moving it is safe - we open the browser ourselves, and nothing external
++    points at it. The proxy port is deliberately not treated this way: the
++    console is configured with that number by hand, so it has to stay put and
++    fail loudly instead (proxy.startup_error, shown in the panel).
++    """
++    last_error = None
++    for port in range(config.WEB_PORT, config.WEB_PORT + 10):
++        try:
++            return make_server(port=port), port
++        except OSError as e:
++            last_error = e
++    raise last_error
++
++
++def main():
++    _raise_fd_limit()
++    proxy_thread = threading.Thread(target=serve_proxy, daemon=True)
++    proxy_thread.start()
++
++    try:
++        server, web_port = _start_web_server()
++    except OSError as e:
++        print(f"Couldn't start the control panel near port {config.WEB_PORT}: {e}")
++        print("Set BO2_WEB_PORT to a free port and try again.")
++        return 1
++
++    _print_banner(web_port)
++
+     time.sleep(0.3)
+     try:
+-        webbrowser.open(f"http://localhost:{config.WEB_PORT}")
++        webbrowser.open(f"http://localhost:{web_port}")
+     except Exception:
+         pass
+ 
+-    server = make_server()
+     try:
+         server.serve_forever()
+     except KeyboardInterrupt:
+         print("\nStopping...")
++    finally:
++        server.server_close()
++    return 0
+ 
+ 
+ if __name__ == "__main__":
+-    main()
++    sys.exit(main())
+diff --git a/start.command b/start.command
+new file mode 100755
+index 0000000..c94610d
+--- /dev/null
++++ b/start.command
+@@ -0,0 +1,47 @@
++#!/bin/bash
++# macOS: double-click this in Finder to start the toolkit.
++#
++# Finder can't run start.sh directly - .command is the extension it opens in
++# Terminal - so this is the macOS entry point. It leaves the Terminal window
++# open, which is what you want: that window is what keeps the proxy running.
++cd "$(dirname "$0")" || exit 1
++
++find_python() {
++  for candidate in python3 python; do
++    if command -v "$candidate" >/dev/null 2>&1; then
++      if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
++        echo "$candidate"
++        return 0
++      fi
++    fi
++  done
++  return 1
++}
++
++PYTHON=$(find_python)
++if [ -z "$PYTHON" ]; then
++  echo "Python 3.9 or newer is required but wasn't found."
++  echo
++  echo "Install it from https://www.python.org/downloads/ or with Homebrew:"
++  echo "  brew install python3"
++  echo
++  read -r -p "Press Return to close."
++  exit 1
++fi
++
++if ! "$PYTHON" -c 'import PIL' >/dev/null 2>&1; then
++  echo "Installing Pillow (needed to draw emblem previews)..."
++  # --user keeps this out of the system Python, which macOS marks read-only.
++  "$PYTHON" -m pip install --user -r requirements.txt || {
++    echo
++    echo "That didn't work. Install it by hand with:"
++    echo "  $PYTHON -m pip install --user -r requirements.txt"
++    echo
++    read -r -p "Press Return to close."
++    exit 1
++  }
++fi
++
++"$PYTHON" run.py
++echo
++read -r -p "Stopped. Press Return to close this window."
+diff --git a/start.sh b/start.sh
+new file mode 100755
+index 0000000..b02f9b1
+--- /dev/null
++++ b/start.sh
+@@ -0,0 +1,28 @@
++#!/bin/bash
++# Linux: run ./start.sh from a terminal.
++# On macOS use start.command instead - Finder will open it in Terminal for you.
++cd "$(dirname "$0")" || exit 1
++
++PYTHON=""
++for candidate in python3 python; do
++  if command -v "$candidate" >/dev/null 2>&1 &&
++     "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
++    PYTHON="$candidate"
++    break
++  fi
++done
++
++if [ -z "$PYTHON" ]; then
++  echo "Python 3.9 or newer is required but wasn't found."
++  echo "Install it with your package manager, e.g. sudo apt install python3 python3-pip"
++  exit 1
++fi
++
++if ! "$PYTHON" -c 'import PIL' >/dev/null 2>&1; then
++  echo "Pillow isn't installed. Install it with:"
++  echo "  $PYTHON -m pip install -r requirements.txt"
++  echo "(or your distro's package, e.g. sudo apt install python3-pil)"
++  exit 1
++fi
++
++exec "$PYTHON" run.py
+diff --git a/tests/test_proxy_end_to_end.py b/tests/test_proxy_end_to_end.py
+new file mode 100644
+index 0000000..0691765
+--- /dev/null
++++ b/tests/test_proxy_end_to_end.py
+@@ -0,0 +1,182 @@
++"""Capture and Show driven through the real proxy over real sockets.
++
++A stand-in Demonware server plays the part of the content server, and
++proxy._connect_upstream is redirected to it - everything else (request
++parsing, emblem matching, mode handling, writing captures, replaying a
++selection) is the actual code path a console goes through.
++
++Run from the repo root:
++
++    python -m unittest discover -s tests
++"""
++import http.server
++import os
++import shutil
++import socket
++import struct
++import sys
++import tempfile
++import threading
++import unittest
++
++_TMP = tempfile.mkdtemp(prefix="bo2toolkit-e2e-")
++os.environ["BO2_TOOLKIT_DATA_DIR"] = _TMP
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++from emblemtool import broadcast, config, consoles, proxy, state, storage  # noqa: E402
++
++EMBLEM_BODY = b"".join(
++    struct.pack("<H", 137 if i < 3 else 65535) + b"\x00\x00"
++    + struct.pack("<9f", 1.0, 0.5, 0.25, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
++    + b"\x00\x00\x00\x00"
++    for i in range(32)
++)
++OTHER_BODY = b"not an emblem"
++
++EMBLEM_PATH = "/u51b08745d269.slot_504"
++EMBLEM_HOST = consoles.LEGACY_PS_HOST
++
++
++class FakeDemonware(http.server.BaseHTTPRequestHandler):
++    protocol_version = "HTTP/1.0"  # close after each response
++
++    def log_message(self, *args):
++        pass
++
++    def do_GET(self):
++        body = EMBLEM_BODY if ".slot_" in self.path else OTHER_BODY
++        self.send_response(200)
++        self.send_header("Content-Type", "application/octet-stream")
++        self.send_header("Content-Length", str(len(body)))
++        self.end_headers()
++        self.wfile.write(body)
++
++
++def free_port():
++    with socket.socket() as s:
++        s.bind(("127.0.0.1", 0))
++        return s.getsockname()[1]
++
++
++class ProxyEndToEndTest(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeDemonware)
++        cls.upstream_port = cls.upstream.server_address[1]
++        threading.Thread(target=cls.upstream.serve_forever, daemon=True).start()
++
++        # Every upstream connection lands on the stand-in server instead of the
++        # real internet; the host the proxy *thinks* it's talking to is still
++        # whatever the request line said, which is what matching keys off.
++        cls._real_connect = proxy._connect_upstream
++        proxy._connect_upstream = lambda host, port: cls._real_connect(
++            "127.0.0.1", cls.upstream_port)
++
++        cls.proxy_port = free_port()
++        threading.Thread(
++            target=proxy.serve, args=("127.0.0.1", cls.proxy_port), daemon=True
++        ).start()
++        cls._wait_for_proxy()
++
++    @classmethod
++    def _wait_for_proxy(cls):
++        for _ in range(100):
++            try:
++                with socket.create_connection(("127.0.0.1", cls.proxy_port), timeout=0.5):
++                    return
++            except OSError:
++                pass
++        raise RuntimeError("proxy never came up")
++
++    @classmethod
++    def tearDownClass(cls):
++        proxy._connect_upstream = cls._real_connect
++        cls.upstream.shutdown()
++        cls.upstream.server_close()
++        shutil.rmtree(_TMP, ignore_errors=True)
++
++    def setUp(self):
++        shutil.rmtree(config.SAVED_DIR, ignore_errors=True)
++        state.write_state("PASSTHROUGH")
++
++    def through_proxy(self, host, path):
++        """One request through the proxy, exactly as a console sends it."""
++        request = (
++            f"GET http://{host}{path} HTTP/1.1\r\n"
++            f"Host: {host}\r\n"
++            f"User-Agent: CallOfDuty\r\n"
++            f"Connection: close\r\n\r\n"
++        ).encode()
++        with socket.create_connection(("127.0.0.1", self.proxy_port), timeout=10) as s:
++            s.sendall(request)
++            chunks = []
++            while True:
++                chunk = s.recv(65536)
++                if not chunk:
++                    break
++                chunks.append(chunk)
++        return b"".join(chunks)
++
++    def test_passthrough_leaves_the_response_alone(self):
++        response = self.through_proxy(EMBLEM_HOST, EMBLEM_PATH)
++        self.assertIn(b"200", response.split(b"\r\n")[0])
++        self.assertTrue(response.endswith(EMBLEM_BODY))
++        self.assertFalse(os.path.isdir(config.SAVED_DIR) and os.listdir(config.SAVED_DIR))
++
++    def test_capture_writes_the_slot_and_still_serves_the_real_data(self):
++        state.write_state("CAPTURE")
++        response = self.through_proxy(EMBLEM_HOST, EMBLEM_PATH)
++        self.assertTrue(response.endswith(EMBLEM_BODY), "console must still get real data")
++
++        groups = storage.list_groups()
++        self.assertEqual(groups, ["001"])
++        self.assertEqual(storage.group_slots("001"), [504])
++        self.assertEqual(storage.read_meta("001")["userhash"], "u51b08745d269")
++        with open(os.path.join(storage.group_dir("001"), "slot_504.bin"), "rb") as f:
++            self.assertTrue(f.read().endswith(EMBLEM_BODY))
++
++    def test_capture_works_on_a_host_no_preset_knows(self):
++        """The PS4 case: a SKU on a hostname nobody has captured before."""
++        state.write_state("CAPTURE")
++        self.through_proxy("ops2-ps4-cs.prod.demonware.net", EMBLEM_PATH)
++        self.assertEqual(storage.group_slots("001"), [504])
++        self.assertEqual(
++            proxy.get_detected()["emblem_host"], "ops2-ps4-cs.prod.demonware.net")
++
++    def test_show_replaces_the_response_with_the_selection(self):
++        state.write_state("CAPTURE")
++        self.through_proxy(EMBLEM_HOST, EMBLEM_PATH)
++        broadcast.select_emblem("001", 504)
++
++        replacement = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nMINE!"
++        with open(os.path.join(storage.group_dir(config.ACTIVE_NAME), "selected.bin"), "wb") as f:
++            f.write(replacement)
++
++        state.write_state("INJECT")
++        # A different slot number on purpose: the console asks for whichever of
++        # its own slots it likes, and gets the selection regardless.
++        self.assertEqual(self.through_proxy(EMBLEM_HOST, "/u00000000abcd.slot_1"), replacement)
++
++    def test_show_falls_back_to_real_data_with_nothing_selected(self):
++        broadcast.clear_selection()
++        state.write_state("INJECT")
++        self.assertTrue(self.through_proxy(EMBLEM_HOST, EMBLEM_PATH).endswith(EMBLEM_BODY))
++
++    def test_non_emblem_demonware_traffic_is_untouched_in_every_mode(self):
++        for mode in ("PASSTHROUGH", "CAPTURE", "INJECT"):
++            with self.subTest(mode=mode):
++                state.write_state(mode)
++                response = self.through_proxy(EMBLEM_HOST, "/auth/login")
++                self.assertTrue(response.endswith(OTHER_BODY))
++
++    def test_unrelated_hosts_are_untouched_in_every_mode(self):
++        for mode in ("PASSTHROUGH", "CAPTURE", "INJECT"):
++            with self.subTest(mode=mode):
++                state.write_state(mode)
++                response = self.through_proxy("example.com", EMBLEM_PATH)
++                self.assertTrue(response.endswith(EMBLEM_BODY))
++                self.assertFalse(storage.list_groups(), "must not capture off-host traffic")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_toolkit.py b/tests/test_toolkit.py
+new file mode 100644
+index 0000000..3029dac
+--- /dev/null
++++ b/tests/test_toolkit.py
+@@ -0,0 +1,336 @@
++"""Tests for the cross-console and cross-platform behaviour.
++
++Run from the repo root:
++
++    python -m unittest discover -s tests
++
++Pillow is only needed for the rendering tests; they skip without it.
++"""
++import json
++import os
++import struct
++import sys
++import tempfile
++import unittest
++import urllib.error
++import urllib.request
++
++# config reads this at import time, so it has to be set before emblemtool is
++# imported - otherwise the tests would scribble in the real saved/ folder.
++_TMP = tempfile.mkdtemp(prefix="bo2toolkit-tests-")
++os.environ["BO2_TOOLKIT_DATA_DIR"] = _TMP
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++from emblemtool import config, consoles, proxy, settings, storage  # noqa: E402
++from emblemtool.shapes import render  # noqa: E402
++from emblemtool.web import netinfo, server  # noqa: E402
++
++LEGACY = consoles.LEGACY_PS_HOST
++EMBLEM_PATH = "/u51b08745d269.slot_504?ts=1"
++
++
++class TestEmblemRequestMatching(unittest.TestCase):
++    """The PS4 fix: emblem traffic is recognised by its path, so a SKU on a
++    hostname nobody has captured yet still works."""
++
++    def test_auto_matches_the_legacy_ps3_host(self):
++        userhash, slot = consoles.match_emblem_request(LEGACY, EMBLEM_PATH, "auto")
++        self.assertEqual(userhash, "u51b08745d269")
++        self.assertEqual(slot, 504)
++
++    def test_auto_matches_an_unknown_console_host(self):
++        for host in (
++            "ops2-ps4-cs.prod.demonware.net",
++            "ops2-ps5-cs.prod.demonware.net",
++            "ops2-something-else-cs2.prod.demonware.net",
++        ):
++            with self.subTest(host=host):
++                _, slot = consoles.match_emblem_request(host, EMBLEM_PATH, "auto")
++                self.assertEqual(slot, 504, f"{host} should be recognised in auto mode")
++
++    def test_auto_ignores_non_demonware_hosts(self):
++        _, slot = consoles.match_emblem_request("example.com", EMBLEM_PATH, "auto")
++        self.assertIsNone(slot)
++
++    def test_auto_ignores_non_emblem_paths_on_demonware(self):
++        for path in ("/", "/auth/login", "/u51b08745d269.profile"):
++            with self.subTest(path=path):
++                _, slot = consoles.match_emblem_request(LEGACY, path, "auto")
++                self.assertIsNone(slot)
++
++    def test_hostname_suffix_cannot_be_spoofed(self):
++        _, slot = consoles.match_emblem_request(
++            "demonware.net.evil.example", EMBLEM_PATH, "auto")
++        self.assertIsNone(slot)
++
++    def test_pinned_console_only_accepts_its_own_hosts(self):
++        _, slot = consoles.match_emblem_request(LEGACY, EMBLEM_PATH, "ps5")
++        self.assertEqual(slot, 504)
++        _, slot = consoles.match_emblem_request(
++            "ops2-xbl-cs.prod.demonware.net", EMBLEM_PATH, "ps5")
++        self.assertIsNone(slot)
++
++    def test_ps4_preset_accepts_both_candidate_hosts(self):
++        for host in (LEGACY, "ops2-ps4-cs.prod.demonware.net"):
++            with self.subTest(host=host):
++                _, slot = consoles.match_emblem_request(host, EMBLEM_PATH, "ps4")
++                self.assertEqual(slot, 504)
++
++    def test_port_in_host_is_ignored(self):
++        _, slot = consoles.match_emblem_request(LEGACY + ":80", EMBLEM_PATH, "auto")
++        self.assertEqual(slot, 504)
++
++    def test_unknown_console_key_falls_back_to_auto(self):
++        self.assertEqual(consoles.get("nonsense").key, "auto")
++        self.assertEqual(consoles.get(None).key, "auto")
++
++    def test_guess_console_from_host(self):
++        self.assertEqual(consoles.guess_console_from_host(LEGACY), "ps3")
++        self.assertEqual(
++            consoles.guess_console_from_host("ops2-xbl-cs.prod.demonware.net"), "xbox")
++        self.assertEqual(
++            consoles.guess_console_from_host("ops2-ps4-cs.prod.demonware.net"), "ps4")
++        self.assertIsNone(consoles.guess_console_from_host("example.com"))
++
++    def test_every_preset_is_well_formed(self):
++        for entry in consoles.all_consoles():
++            with self.subTest(console=entry["key"]):
++                self.assertTrue(entry["name"])
++                self.assertTrue(entry["proxy_steps"])
++
++
++class TestRequestTargetParsing(unittest.TestCase):
++    """Proxies normally get absolute-form request lines, but origin form with
++    a Host header is legal and used to produce an empty host here."""
++
++    def test_absolute_form(self):
++        req = b"GET http://host.example/a/b HTTP/1.1\r\nHost: host.example\r\n\r\n"
++        self.assertEqual(
++            proxy._split_request_target("http://host.example/a/b", req),
++            ("host.example", 80, "/a/b"),
++        )
++
++    def test_absolute_form_with_port(self):
++        req = b"GET http://host.example:8080/a HTTP/1.1\r\n\r\n"
++        self.assertEqual(
++            proxy._split_request_target("http://host.example:8080/a", req),
++            ("host.example", 8080, "/a"),
++        )
++
++    def test_origin_form_uses_the_host_header(self):
++        req = b"GET /a/b HTTP/1.1\r\nHost: host.example\r\n\r\n"
++        self.assertEqual(
++            proxy._split_request_target("/a/b", req),
++            ("host.example", 80, "/a/b"),
++        )
++
++    def test_origin_form_without_a_host_header_yields_no_host(self):
++        host, _, _ = proxy._split_request_target("/a/b", b"GET /a/b HTTP/1.1\r\n\r\n")
++        self.assertEqual(host, "")
++
++
++def make_blob(order, layers):
++    """A 1408-byte emblem body in the given byte order, for the endianness tests."""
++    out = b""
++    for i in range(render.NUM_LAYERS):
++        if i < len(layers):
++            shape, floats, outlined, flipped = layers[i]
++        else:
++            shape, floats, outlined, flipped = render.EMPTY_SHAPE, (0.0,) * 9, 0, 0
++        out += (
++            struct.pack(order + "H", shape) + b"\x00\x00"
++            + struct.pack(order + "9f", *floats)
++            + bytes([outlined, flipped]) + b"\x00\x00"
++        )
++    return out
++
++
++SAMPLE_LAYERS = [
++    (137, (1.0, 0.5, 0.25, 1.0, 0.1, -0.2, 0.0, 0.0, 90.0), 0, 0),
++    (259, (0.0, 0.0, 1.0, 0.75, -0.3, 0.25, -1.0, -1.0, 180.0), 1, 1),
++    (157, (0.2, 0.9, 0.1, 1.0, 0.0, 0.0, -2.0, -2.0, 0.0), 0, 1),
++]
++
++
++class TestEndianness(unittest.TestCase):
++    """BO2 ran on the PS3's big-endian PowerPC and on little-endian x86 (PC and
++    the PS4/PS5 ports). Assuming one of them mangles captures from the other."""
++
++    def test_detects_little_endian(self):
++        self.assertEqual(render.detect_endianness(make_blob("<", SAMPLE_LAYERS)), "<")
++
++    def test_detects_big_endian(self):
++        self.assertEqual(render.detect_endianness(make_blob(">", SAMPLE_LAYERS)), ">")
++
++    def test_both_orders_parse_to_the_same_emblem(self):
++        little = render.parse_slot_bytes(make_blob("<", SAMPLE_LAYERS))
++        big = render.parse_slot_bytes(make_blob(">", SAMPLE_LAYERS))
++        self.assertEqual(len(little), len(SAMPLE_LAYERS))
++        self.assertEqual(len(big), len(little))
++        for a, b in zip(little, big):
++            self.assertEqual(a["shape"], b["shape"])
++            self.assertAlmostEqual(a["r"], b["r"], places=5)
++            self.assertAlmostEqual(a["rot"], b["rot"], places=3)
++            self.assertEqual(a["flipped"], b["flipped"])
++
++    def test_an_all_empty_blob_does_not_crash(self):
++        self.assertEqual(render.parse_slot_bytes(make_blob("<", [])), [])
++
++    def test_http_headers_are_stripped(self):
++        blob = make_blob("<", SAMPLE_LAYERS)
++        with_headers = b"HTTP/1.1 200 OK\r\nContent-Length: 1408\r\n\r\n" + blob
++        self.assertEqual(len(render.parse_slot_bytes(with_headers)), len(SAMPLE_LAYERS))
++
++    def test_explicit_order_overrides_detection(self):
++        blob = make_blob(">", SAMPLE_LAYERS)
++        self.assertNotEqual(
++            render.parse_slot_bytes(blob, order="<"),
++            render.parse_slot_bytes(blob, order=">"),
++        )
++
++    def test_render_survives_out_of_range_colours(self):
++        try:
++            from PIL import Image  # noqa: F401
++        except ImportError:
++            self.skipTest("Pillow not installed")
++        layers = [(137, (1.02, -0.01, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0), 0, 0)]
++        parsed = render.parse_slot_bytes(make_blob("<", layers))
++        self.assertEqual(len(render.render_png(parsed, size=64).size), 2)
++
++
++class TestGroupNameSafety(unittest.TestCase):
++    """Group names arrive from control-panel URLs, and the panel listens on the
++    LAN because the console has to reach it."""
++
++    def test_generated_names_are_accepted(self):
++        for name in ("001", "042", config.ACTIVE_NAME, "a-b_c"):
++            self.assertTrue(storage.is_safe_group(name), name)
++
++    def test_traversal_and_junk_are_rejected(self):
++        for name in ("../../etc", "..", "a/b", "", None, "x" * 65, "a b", "a.b"):
++            self.assertFalse(storage.is_safe_group(name), repr(name))
++
++    def test_group_dir_refuses_to_build_an_escaping_path(self):
++        with self.assertRaises(ValueError):
++            storage.group_dir("../../etc")
++
++
++class TestDataDirectory(unittest.TestCase):
++    """A macOS .app writes to ~/Library/Application Support/..., which doesn't
++    exist on first run - so importing has to create whatever it points at."""
++
++    def test_a_missing_data_directory_is_created_on_import(self):
++        import subprocess
++        with tempfile.TemporaryDirectory() as tmp:
++            target = os.path.join(tmp, "does", "not", "exist", "yet")
++            env = {**os.environ, "BO2_TOOLKIT_DATA_DIR": target}
++            result = subprocess.run(
++                [sys.executable, "-c",
++                 "from emblemtool.state import write_state; write_state('CAPTURE')"],
++                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
++                env=env, capture_output=True, text=True, timeout=60,
++            )
++            self.assertEqual(result.returncode, 0, result.stderr)
++            self.assertTrue(os.path.isfile(os.path.join(target, "state.txt")))
++
++
++class TestNetInfo(unittest.TestCase):
++    def test_lan_ips_are_well_formed(self):
++        entries = netinfo.get_lan_ips()
++        self.assertIsInstance(entries, list)
++        for entry in entries:
++            self.assertEqual(set(entry), {"ip", "interface", "label", "primary"})
++            self.assertFalse(entry["ip"].startswith("127."))
++            self.assertFalse(entry["ip"].startswith("169.254."))
++        self.assertLessEqual(sum(e["primary"] for e in entries), 1)
++
++    def test_no_duplicate_addresses(self):
++        ips = [e["ip"] for e in netinfo.get_lan_ips()]
++        self.assertEqual(len(ips), len(set(ips)))
++
++
++class TestControlPanelApi(unittest.TestCase):
++    """End-to-end against a real server on a real socket."""
++
++    @classmethod
++    def setUpClass(cls):
++        import threading
++        cls.server = server.make_server(host="127.0.0.1", port=0)
++        cls.port = cls.server.server_address[1]
++        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
++        cls.thread.start()
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.server.shutdown()
++        cls.server.server_close()
++
++    def get(self, path):
++        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=10) as r:
++            return json.loads(r.read())
++
++    def post(self, path, payload):
++        req = urllib.request.Request(
++            f"http://127.0.0.1:{self.port}{path}",
++            data=json.dumps(payload).encode(),
++            headers={"Content-Type": "application/json"},
++            method="POST",
++        )
++        with urllib.request.urlopen(req, timeout=10) as r:
++            return json.loads(r.read())
++
++    def test_status(self):
++        body = self.get("/api/status")
++        self.assertIn(body["mode"], ("off", "capture", "inject"))
++        self.assertIn("detected", body)
++        self.assertIn("proxy_error", body)
++
++    def test_network_info_lists_addresses_and_consoles(self):
++        body = self.get("/api/network-info")
++        self.assertIsInstance(body["lan_ips"], list)
++        self.assertEqual(body["proxy_port"], config.PROXY_PORT)
++        self.assertTrue(body["console"]["name"])
++        self.assertTrue(any(c["key"] == "ps4" for c in body["consoles"]))
++
++    def test_console_can_be_changed_and_persists(self):
++        try:
++            self.post("/api/console", {"console": "ps4"})
++            self.assertEqual(settings.get_console(), "ps4")
++            self.assertEqual(self.get("/api/status")["console"], "ps4")
++            self.post("/api/console", {"console": "not-a-console"})
++            self.assertEqual(settings.get_console(), "auto")
++        finally:
++            settings.set_console("auto")
++
++    def test_index_is_served(self):
++        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=10) as r:
++            self.assertIn(b"BO2 Emblem Toolkit", r.read())
++
++    def test_render_rejects_a_traversal_attempt(self):
++        for path in (
++            "/api/render/..%2f..%2f..%2fetc/0.png",
++            "/api/render/foo/..%2f..%2fetc%2fpasswd.png",
++        ):
++            with self.subTest(path=path):
++                with self.assertRaises(urllib.error.HTTPError) as caught:
++                    self.get(path)
++                self.assertEqual(caught.exception.code, 404)
++
++    def test_static_traversal_is_refused(self):
++        with self.assertRaises(urllib.error.HTTPError) as caught:
++            self.get("/../../config.py")
++        self.assertEqual(caught.exception.code, 404)
++
++    def test_select_rejects_an_unknown_group(self):
++        with self.assertRaises(urllib.error.HTTPError) as caught:
++            self.post("/api/select", {"group": "../../etc", "slot": 1})
++        self.assertEqual(caught.exception.code, 404)
++
++    def test_label_rejects_an_unknown_group(self):
++        with self.assertRaises(urllib.error.HTTPError) as caught:
++            self.post("/api/emblems/..%2f..%2fetc/1/label", {"label": "x"})
++        self.assertEqual(caught.exception.code, 400)
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+

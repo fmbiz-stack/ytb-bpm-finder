@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BO2 Emblem Toolkit</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-badge">◆</div>
+    <div>
+      <h1>BO2 Emblem Toolkit</h1>
+      <p class="tagline">Copy another player's Black Ops II emblem onto your own account</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="setup-box" id="setupBox">
+      <span class="setup-label">Console proxy setting</span>
+      <span class="setup-value" id="setupValue">detecting…</span>
+    </div>
+    <button class="btn btn-ghost btn-small" id="quitBtn" title="Stop the proxy and control panel">Quit</button>
+  </div>
+</header>
+
+<main>
+
+  <details class="card setup-card" id="setupCard">
+    <summary>
+      <span class="summary-title">Console setup</span>
+      <span class="detect-pill" id="detectPill">waiting for emblem traffic</span>
+    </summary>
+
+    <div class="setup-body">
+      <div class="setup-row">
+        <label for="consoleSelect">Your console</label>
+        <select id="consoleSelect"></select>
+      </div>
+      <p class="muted" id="consoleNote"></p>
+
+      <h3>Point it at this computer</h3>
+      <p class="muted">Use the first address unless your console is tethered directly to this computer, in which case use the sharing address.</p>
+      <div class="ip-list" id="ipList"></div>
+
+      <h3>Where to put it</h3>
+      <ol class="steps" id="consoleSteps"></ol>
+
+      <h3>Is it working?</h3>
+      <p class="muted" id="detectDetail">No emblem requests have reached the proxy yet. That's expected until you open a player's profile or your own emblem editor with the console pointed here.</p>
+    </div>
+  </details>
+
+  <section class="card mode-card">
+    <h2>Mode</h2>
+    <div class="mode-grid">
+      <button class="mode-btn" data-mode="off">
+        <span class="mode-icon">⏻</span>
+        <span class="mode-name">Off</span>
+        <span class="mode-desc">Normal internet, nothing is touched</span>
+      </button>
+      <button class="mode-btn" data-mode="capture">
+        <span class="mode-icon">📸</span>
+        <span class="mode-name">Capture</span>
+        <span class="mode-desc">Save the emblem of the player whose profile you open</span>
+      </button>
+      <button class="mode-btn" data-mode="inject">
+        <span class="mode-icon">📤</span>
+        <span class="mode-name">Show</span>
+        <span class="mode-desc">Load your selected emblem into your own emblem editor</span>
+      </button>
+    </div>
+    <p class="mode-hint" id="modeHint"></p>
+    <div class="warning-box">
+      <p><strong>The editor only checks once per session.</strong> After you open your emblem editor the first time, the game caches what it loaded and won't check again, even if you select a different emblem here. To load a different one, restart the game, or switch to Zombies and back to Multiplayer, before opening the editor again.</p>
+      <p><strong>Locked shapes won't work.</strong> If a captured emblem uses a shape, rank, or weapon icon your own account hasn't unlocked, the game may fail to load or save it. That's Black Ops II enforcing it, not something this tool can get around.</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="section-head">
+      <h2>Your captured emblems</h2>
+      <button class="btn btn-ghost btn-small" id="refreshBtn">Refresh</button>
+    </div>
+    <p class="muted">Click one to select it. Once you switch to <strong>Show</strong> and open your own emblem editor, this is the emblem that loads there, ready to save as your own.</p>
+    <p class="muted" id="emblemsEmpty">No emblems captured yet. Switch to <strong>Capture</strong> mode, then open a player's profile on your console.</p>
+    <div class="emblem-list" id="emblemList"></div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    BO2 Emblem Toolkit — created by <a href="https://github.com/alexkotr1" target="_blank" rel="noopener">alexkotr1</a>.
+    Licensed under the <a href="/LICENSE" target="_blank" rel="noopener">MIT License</a> — free to use and modify, credit appreciated.
+    For personal use on your own console and network.
+  </p>
+</footer>
+
+<template id="emblemCardTpl">
+  <div class="emblem-card">
+    <div class="emblem-select-indicator">✓</div>
+    <div class="thumb-frame"><img class="emblem-thumb" alt="emblem"></div>
+    <input class="emblem-label-input" placeholder="Unnamed emblem">
+    <span class="emblem-date"></span>
+  </div>
+</template>
+
+<template id="ipRowTpl">
+  <div class="ip-row">
+    <code class="ip-value"></code>
+    <span class="ip-label"></span>
+  </div>
+</template>
+
+<script src="/app.js"></script>
+</body>
+</html>
