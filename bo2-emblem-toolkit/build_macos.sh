@@ -16,28 +16,35 @@ cd "$(dirname "$0")"
 PYTHON=${PYTHON:-python3}
 "$PYTHON" -m pip install -r requirements.txt pyinstaller
 
+ROOT="$PWD"
+
 # macOS uses ':' as the --add-data separator, unlike Windows' ';'.
+#
+# The source side of --add-data is absolute on purpose: PyInstaller resolves a
+# relative one against the spec file's directory, not the working directory, so
+# with --specpath below a relative "reference_shapes" would be looked for inside
+# build/ and the build would fail.
 COMMON=(
   --noconfirm
   --clean
   --onefile
   --name BO2EmblemToolkit
-  --add-data "reference_shapes:reference_shapes"
-  --add-data "emblemtool/web/static:emblemtool/web/static"
-  --add-data "LICENSE:."
+  --add-data "$ROOT/reference_shapes:reference_shapes"
+  --add-data "$ROOT/emblemtool/web/static:emblemtool/web/static"
+  --add-data "$ROOT/LICENSE:."
 )
 
 echo "==> Building the command-line binary"
 "$PYTHON" -m PyInstaller "${COMMON[@]}" \
   --distpath dist/cli --workpath build/cli --specpath build \
-  run.py
+  "$ROOT/run.py"
 
 echo "==> Building the .app bundle"
 "$PYTHON" -m PyInstaller "${COMMON[@]}" \
   --windowed \
   --osx-bundle-identifier com.github.alexkotr1.bo2emblemtoolkit \
   --distpath dist/app --workpath build/app --specpath build/appspec \
-  run.py
+  "$ROOT/run.py"
 
 echo "==> Ad-hoc signing"
 codesign --force --deep --sign - dist/app/BO2EmblemToolkit.app

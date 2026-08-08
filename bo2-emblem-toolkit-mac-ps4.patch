@@ -1,4 +1,4 @@
-From f40e4e7db1301bfde49c19835388b3c91730c05c Mon Sep 17 00:00:00 2001
+From efdcc3fee4380681f352c387d80d07d3c859b7a7 Mon Sep 17 00:00:00 2001
 From: Felix Morris <felixmorris.biz@gmail.com>
 Date: Sat, 8 Aug 2026 14:33:26 +0000
 Subject: [PATCH] Add macOS and PS4 support
@@ -21,7 +21,7 @@ requests, missing socket timeouts and silent proxy startup failures.
  .gitignore                       |   1 +
  PORTING_NOTES.md                 | 124 ++++++++++++
  README.md                        |  37 ++--
- build_macos.sh                   |  61 ++++++
+ build_macos.sh                   |  68 +++++++
  docs/CONSOLES.md                 | 124 ++++++++++++
  docs/INSTALL.md                  | 231 +++++++++++++++------
  docs/USAGE.md                    |  19 +-
@@ -42,7 +42,7 @@ requests, missing socket timeouts and silent proxy startup failures.
  start.sh                         |  28 +++
  tests/test_proxy_end_to_end.py   | 182 +++++++++++++++++
  tests/test_toolkit.py            | 336 +++++++++++++++++++++++++++++++
- 24 files changed, 2278 insertions(+), 203 deletions(-)
+ 24 files changed, 2285 insertions(+), 203 deletions(-)
  create mode 100644 PORTING_NOTES.md
  create mode 100755 build_macos.sh
  create mode 100644 docs/CONSOLES.md
@@ -300,10 +300,10 @@ index 777f362..baa1c40 100644
  
 diff --git a/build_macos.sh b/build_macos.sh
 new file mode 100755
-index 0000000..9b01141
+index 0000000..0258284
 --- /dev/null
 +++ b/build_macos.sh
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,68 @@
 +#!/bin/bash
 +# Builds the macOS release artifacts. Only needed if you want to produce them
 +# yourself instead of downloading them from the Releases page.
@@ -322,28 +322,35 @@ index 0000000..9b01141
 +PYTHON=${PYTHON:-python3}
 +"$PYTHON" -m pip install -r requirements.txt pyinstaller
 +
++ROOT="$PWD"
++
 +# macOS uses ':' as the --add-data separator, unlike Windows' ';'.
++#
++# The source side of --add-data is absolute on purpose: PyInstaller resolves a
++# relative one against the spec file's directory, not the working directory, so
++# with --specpath below a relative "reference_shapes" would be looked for inside
++# build/ and the build would fail.
 +COMMON=(
 +  --noconfirm
 +  --clean
 +  --onefile
 +  --name BO2EmblemToolkit
-+  --add-data "reference_shapes:reference_shapes"
-+  --add-data "emblemtool/web/static:emblemtool/web/static"
-+  --add-data "LICENSE:."
++  --add-data "$ROOT/reference_shapes:reference_shapes"
++  --add-data "$ROOT/emblemtool/web/static:emblemtool/web/static"
++  --add-data "$ROOT/LICENSE:."
 +)
 +
 +echo "==> Building the command-line binary"
 +"$PYTHON" -m PyInstaller "${COMMON[@]}" \
 +  --distpath dist/cli --workpath build/cli --specpath build \
-+  run.py
++  "$ROOT/run.py"
 +
 +echo "==> Building the .app bundle"
 +"$PYTHON" -m PyInstaller "${COMMON[@]}" \
 +  --windowed \
 +  --osx-bundle-identifier com.github.alexkotr1.bo2emblemtoolkit \
 +  --distpath dist/app --workpath build/app --specpath build/appspec \
-+  run.py
++  "$ROOT/run.py"
 +
 +echo "==> Ad-hoc signing"
 +codesign --force --deep --sign - dist/app/BO2EmblemToolkit.app
