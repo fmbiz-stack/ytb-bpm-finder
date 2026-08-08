@@ -1,11 +1,13 @@
 name: Build macOS app
 
 # Builds the downloadable Mac version. PyInstaller can't cross-compile, so a
-# .app has to be built on a real Mac - these runners are that Mac.
+# .app has to be built on a real Mac - this runner is that Mac.
 #
-# Two jobs because a build is tied to its architecture: macos-13 runners are
-# Intel, macos-14 are Apple Silicon. Grab whichever matches the machine you're
-# running it on.
+# Apple Silicon only. A PyInstaller build is tied to its architecture, so an
+# Intel .app would need an Intel runner, and GitHub has retired those - a
+# macos-13 job sits queued forever rather than failing. Intel Macs can still
+# run the toolkit from source (./start.command), which is architecture
+# independent, or build their own .app with ./build_macos.sh.
 
 on:
   push:
@@ -17,16 +19,9 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            arch: apple-silicon
-          - runner: macos-13
-            arch: intel
-
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-14
+    env:
+      ARCH: apple-silicon
 
     steps:
       - uses: actions/checkout@v4
@@ -52,10 +47,10 @@ jobs:
         run: |
           ditto -c -k --keepParent \
             dist/app/BO2EmblemToolkit.app \
-            "BO2EmblemToolkit-${{ matrix.arch }}-app.zip"
+            "BO2EmblemToolkit-${{ env.ARCH }}-app.zip"
           ditto -c -k --keepParent \
             dist/cli/BO2EmblemToolkit \
-            "BO2EmblemToolkit-${{ matrix.arch }}-terminal.zip"
+            "BO2EmblemToolkit-${{ env.ARCH }}-terminal.zip"
 
       - name: Smoke test the built binary
         working-directory: bo2-emblem-toolkit
@@ -81,6 +76,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: BO2EmblemToolkit-macOS-${{ matrix.arch }}
+          name: BO2EmblemToolkit-macOS-${{ env.ARCH }}
           path: bo2-emblem-toolkit/*.zip
           retention-days: 30
