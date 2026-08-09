@@ -128,6 +128,31 @@ def main():
             for layer in layers:
                 layer["shape_name"] = known_ids.get(layer["shape"], "UNKNOWN")
 
+            # The renderer scales a layer by materialising the whole bitmap at
+            # 2^exponent x the output size. Real emblems reach exponent 6.0
+            # (64x the canvas), which at a 512px output means a 32768px image -
+            # PIL rejects it as a decompression bomb, and the sizes that do
+            # squeak under the limit take minutes. So size the output from the
+            # emblem's largest layer instead of finding out the hard way.
+            #
+            # These are the ambitious emblems, not the broken ones, so they must
+            # never be dropped: a small thumbnail plus correct layer data beats
+            # a hang. The .json below is the real deliverable either way.
+            max_exp = max((max(l["sx"], l["sy"]) for l in layers), default=0.0)
+            budget = 2048  # widest intermediate bitmap we're willing to build
+            fits = int(budget / max(1.0, 2 ** max(0.0, max_exp)))
+            png_size = max(32, min(args.size, fits)) if fits >= 32 else None
+
+            png, render_error = None, ""
+            if png_size:
+                try:
+                    png = render.render_file_png_bytes(src, size=png_size)
+                except Exception as e:
+                    png, render_error = None, f"{type(e).__name__}: {e}"
+            else:
+                render_error = (f"layer scale exponent {max_exp:.2f} "
+                                f"({2 ** max_exp:.0f}x canvas) is too large to rasterise")
+
             record = {
                 "source": f"{group}/{filename}",
                 "label": label,
@@ -135,17 +160,21 @@ def main():
                 "byte_order": "little" if order == "<" else "big",
                 "body_bytes": len(body),
                 "layers_used": len(layers),
+                "max_scale_exponent": max((max(l["sx"], l["sy"]) for l in layers), default=None),
+                "png_rendered_at": png_size,
+                "render_error": "" if png else render_error,
                 "layers": layers,
             }
 
             with open(os.path.join(args.out, stem + ".json"), "w") as f:
                 json.dump(record, f, indent=1)
-            with open(os.path.join(args.out, stem + ".png"), "wb") as f:
-                f.write(render.render_file_png_bytes(src, size=args.size))
+            if png:
+                with open(os.path.join(args.out, stem + ".png"), "wb") as f:
+                    f.write(png)
             shutil.copy2(src, os.path.join(args.out, stem + ".bin"))
 
-            index.append({k: v for k, v in record.items() if k != "layers"} |
-                         {"files": [stem + ext for ext in (".png", ".json", ".bin")]})
+            files = [stem + ".json", stem + ".bin"] + ([stem + ".png"] if png else [])
+            index.append({k: v for k, v in record.items() if k != "layers"} | {"files": files})
 
     with open(os.path.join(args.out, "index.json"), "w") as f:
         json.dump(index, f, indent=1)
@@ -158,6 +187,16 @@ def main():
               f"average {sum(used)/len(used):.1f} of 32")
         orders = {e["byte_order"] for e in index}
         print(f"  byte order   : {', '.join(sorted(orders))}")
+        exps = [e["max_scale_exponent"] for e in index if e["max_scale_exponent"] is not None]
+        if exps:
+            print(f"  max scale exp: {max(exps):.2f}  (2^n x canvas)")
+        downscaled = [e for e in index if e["png_rendered_at"] and e["png_rendered_at"] < args.size]
+        failed = [e for e in index if not e["png_rendered_at"]]
+        if downscaled:
+            print(f"  {len(downscaled)} emblem(s) needed a smaller PNG (oversized layers) - "
+                  "these are usually the ambitious ones, not the broken ones")
+        if failed:
+            print(f"  {len(failed)} emblem(s) produced no PNG at all; their .json and .bin are still correct")
     for name, err in skipped:
         print(f"  skipped {name}: {err}")
     if not index:
