@@ -67,6 +67,8 @@ def main():
     ap.add_argument("--toolkit", help="path to the bo2-emblem-toolkit checkout")
     ap.add_argument("--out", default="emblem_export", help="output folder")
     ap.add_argument("--size", type=int, default=512, help="rendered PNG size in px")
+    ap.add_argument("--no-layer-check", action="store_true",
+                    help="skip the per-layer visibility check (faster)")
     args = ap.parse_args()
 
     toolkit = find_toolkit(args.toolkit)
@@ -128,20 +130,11 @@ def main():
             for layer in layers:
                 layer["shape_name"] = known_ids.get(layer["shape"], "UNKNOWN")
 
-            # The renderer scales a layer by materialising the whole bitmap at
-            # 2^exponent x the output size. Real emblems reach exponent 6.0
-            # (64x the canvas), which at a 512px output means a 32768px image -
-            # PIL rejects it as a decompression bomb, and the sizes that do
-            # squeak under the limit take minutes. So size the output from the
-            # emblem's largest layer instead of finding out the hard way.
-            #
-            # These are the ambitious emblems, not the broken ones, so they must
-            # never be dropped: a small thumbnail plus correct layer data beats
-            # a hang. The .json below is the real deliverable either way.
+            # An emblem whose layers are too large to rasterise at the requested
+            # size is drawn smaller rather than skipped - those are the most
+            # sophisticated emblems, not broken ones.
             max_exp = max((max(l["sx"], l["sy"]) for l in layers), default=0.0)
-            budget = 2048  # widest intermediate bitmap we're willing to build
-            fits = int(budget / max(1.0, 2 ** max(0.0, max_exp)))
-            png_size = max(32, min(args.size, fits)) if fits >= 32 else None
+            png_size = render.safe_render_size(layers, requested=args.size)
 
             png, render_error = None, ""
             if png_size:
@@ -150,8 +143,23 @@ def main():
                 except Exception as e:
                     png, render_error = None, f"{type(e).__name__}: {e}"
             else:
-                render_error = (f"layer scale exponent {max_exp:.2f} "
-                                f"({2 ** max_exp:.0f}x canvas) is too large to rasterise")
+                render_error = (f"largest layer is {2 ** max_exp:.0f}x the canvas "
+                                f"(scale exponent {max_exp:.2f}) - too large to rasterise")
+
+            # Which layers actually put pixels on the canvas when drawn alone.
+            # A layer that contributes nothing by itself is either off-canvas,
+            # fully transparent, or lost by the renderer - which is how a shape
+            # goes "missing" from a preview while sitting in the bytes. Being
+            # covered by a later layer is NOT flagged here: that's carving, and
+            # it's deliberate.
+            if not args.no_layer_check and png_size:
+                for layer in layers:
+                    try:
+                        alone = render.render_png([layer], size=png_size, bg=(0, 0, 0, 0))
+                        layer["visible_alone"] = alone.getbbox() is not None
+                    except Exception:
+                        layer["visible_alone"] = None
+            invisible = [l["index"] for l in layers if l.get("visible_alone") is False]
 
             record = {
                 "source": f"{group}/{filename}",
@@ -163,6 +171,7 @@ def main():
                 "max_scale_exponent": max((max(l["sx"], l["sy"]) for l in layers), default=None),
                 "png_rendered_at": png_size,
                 "render_error": "" if png else render_error,
+                "layers_not_visible_alone": invisible,
                 "layers": layers,
             }
 
@@ -197,6 +206,11 @@ def main():
                   "these are usually the ambitious ones, not the broken ones")
         if failed:
             print(f"  {len(failed)} emblem(s) produced no PNG at all; their .json and .bin are still correct")
+        lost = [e for e in index if e.get("layers_not_visible_alone")]
+        if lost:
+            total = sum(len(e["layers_not_visible_alone"]) for e in lost)
+            print(f"  {total} layer(s) across {len(lost)} emblem(s) draw nothing on their own "
+                  "- see layers_not_visible_alone in each .json")
     for name, err in skipped:
         print(f"  skipped {name}: {err}")
     if not index:

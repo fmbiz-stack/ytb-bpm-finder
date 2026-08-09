@@ -231,8 +231,40 @@ def render_png(layers, size=256, bg=(24, 24, 24, 255)):
     return canvas
 
 
-def render_file_png_bytes(path, size=256):
+# Widest intermediate bitmap we're willing to build for one layer. A layer is
+# rasterised at 2**scale x the output size before being composited, so a real
+# emblem using the game's scale ceiling (exponent 6.0, 64x the canvas) asks for
+# a 16k-pixel-wide bitmap at a 256px output - which Pillow refuses outright as a
+# decompression bomb, and which takes minutes at the sizes that squeak under the
+# limit. Those are the most sophisticated emblems, not broken ones, so they have
+# to render somehow.
+SCALE_BUDGET_PX = 2048
+
+
+def safe_render_size(layers, requested=256, budget=SCALE_BUDGET_PX):
+    """Largest output size <= requested that this emblem can be drawn at.
+
+    Returns None if even the smallest useful size would blow the budget.
+    """
+    if not layers:
+        return requested
+    max_exp = max(max(L["sx"], L["sy"]) for L in layers)
+    fits = int(budget / max(1.0, 2 ** max(0.0, max_exp)))
+    if fits < 32:
+        return None
+    return max(32, min(requested, fits))
+
+
+def render_file_png_bytes(path, size=256, autosize=True):
+    """Render a capture to PNG bytes.
+
+    With autosize (the default), an emblem whose layers are too large to
+    rasterise at `size` is drawn smaller rather than failing - a small preview
+    beats no preview. Pass autosize=False to get the old strict behaviour.
+    """
     layers = parse_slot_file(path)
+    if autosize:
+        size = safe_render_size(layers, requested=size) or 32
     img = render_png(layers, size=size)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
